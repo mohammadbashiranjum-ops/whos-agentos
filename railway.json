@@ -7,7 +7,7 @@
   "deploy": {
     "runtime": "V2",
     "numReplicas": 1,
-    "startCommand": "uvicorn app.main:app --host 0.0.0.0 --port 8000",
+    "startCommand": "bash -lc 'if [ \"${WHOS_ACTIVATION_PROBE_ON_START:-false}\" = \"true\" ]; then python -c \"import asyncio; from agno.agent import Agent; from app.settings import default_model; print(\\\"WHOS_AGENTOS_ACTUAL_START work_id=WHOS-AGENTOS-ACTIVATION-R1\\\", flush=True); r=asyncio.run(Agent(id=\\\"whos-option-a-probe\\\", model=default_model()).arun(\\\"Return exactly 42 and nothing else.\\\")); c=str(r.content).strip(); print(f\\\"WHOS_AGENTOS_REAL_WORK work_id=WHOS-AGENTOS-ACTIVATION-R1 result={c}\\\", flush=True); assert c == \\\"42\\\", c; print(\\\"WHOS_AGENTOS_TERMINAL work_id=WHOS-AGENTOS-ACTIVATION-R1 status=VERIFIED_SUCCESS\\\", flush=True)\" || echo \"WHOS_AGENTOS_PROBE_FAILED\"; fi; exec uvicorn app.main:app --host 0.0.0.0 --port 8000'",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 600,
     "sleepApplication": false,
@@ -15,3 +15,4 @@
     "restartPolicyMaxRetries": 10
   }
 }
+
