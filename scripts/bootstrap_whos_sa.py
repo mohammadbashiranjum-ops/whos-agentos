@@ -92,11 +92,15 @@ def main():
                 )
                 sys.exit(1)
 
-            # Check expiry: expires_at <= now_epoch is expired
+            # Fix 1: Check expiry—READY requires expires_at to be a non-bool int strictly > now_epoch
             existing_expiry = active_sa.get("expires_at")
-            if existing_expiry is not None and existing_expiry <= now_epoch:
+            if (
+                not isinstance(existing_expiry, int)
+                or isinstance(existing_expiry, bool)
+                or existing_expiry <= now_epoch
+            ):
                 print(
-                    f"ERROR: Service account {sa_name} has expired. Not mutating.",
+                    f"ERROR: Service account {sa_name} expiry-invalid/expired. Not mutating.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -105,18 +109,24 @@ def main():
             print(f"WHOS_AGENTOS_SERVICE_ACCOUNT_READY name={sa_name} scopes={len(sa_scopes)}")
             sys.exit(0)
 
-        # No active account: check if revoked account exists
+        # No active account: check if any account exists (including revoked)
+        # Fix 2: After active lookup is None, fetch latest_any with include_revoked=True
         latest_any = db.get_service_account_by_name(sa_name, include_revoked=True)
 
         if latest_any:
-            # Account exists but is revoked: fail closed, do not recreate
+            # Account exists in any state: fail closed, never recreate
             revoked_at = latest_any.get("revoked_at")
             if revoked_at is not None:
                 print(
                     f"ERROR: Service account {sa_name} is revoked. Not mutating.",
                     file=sys.stderr,
                 )
-                sys.exit(1)
+            else:
+                print(
+                    f"ERROR: Service account {sa_name} unexpected existing state. Not mutating.",
+                    file=sys.stderr,
+                )
+            sys.exit(1)
 
         # No account exists at all: create new active account
         sa_id = str(uuid4())
