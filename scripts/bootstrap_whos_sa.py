@@ -6,23 +6,23 @@ Uses Agno's native PostgresDb.create_service_account and ServiceAccount model
 for consistent schema and behavior.
 
 Behavior:
-- If whos-pee-option-a-v2 is absent: create it from WHOS_PEE_AGENTOS_TOKEN
-- If it exists (not revoked) with matching token hash and scopes, and not expired:
-  idempotent success, no change
-- If it exists (not revoked) with different token hash, different scopes, or expired:
-  fail closed, do not mutate
-- If revoked: fail closed, do not mutate
+- If whos-pee-option-a-v2 is absent (and not revoked): create from WHOS_PEE_AGENTOS_TOKEN
+- If active account exists with matching token hash, scopes, and not expired: idempotent success
+- If active account exists with different token hash, scopes, or expired: fail closed, no mutation
+- If no active account but revoked account exists: fail closed, no mutation
+- If any account exists with different state: never recreate, fail closed
 
 After successful creation/validation, prints:
   WHOS_AGENTOS_SERVICE_ACCOUNT_READY name=whos-pee-option-a-v2 scopes=4
 
 Token must start with 'agno_pat_' prefix.
 Never prints plaintext token, hash, or prefix.
+Uses expires_at <= now_epoch for expiry check (Agno v3.0.4 convention).
 """
 
 import os
 import sys
-from datetime import datetime, timedelta
+import time
 from uuid import uuid4
 
 from agno.db.schemas.service_accounts import ServiceAccount
@@ -61,16 +61,17 @@ def main():
         "agents:platform-engineer:read",
         "agents:platform-engineer:run",
     ]
-    expires_at = int((datetime.utcnow() + timedelta(days=30)).timestamp())
+    now_epoch = int(time.time())
+    expires_at = now_epoch + (30 * 24 * 60 * 60)
     created_by = "owner-approved-whos-activation"
 
     try:
-        # Check if service account already exists (not revoked)
-        existing_sa = db.get_service_account_by_name(sa_name, include_revoked=False)
+        # First query: check for active (not revoked) account
+        active_sa = db.get_service_account_by_name(sa_name, include_revoked=False)
 
-        if existing_sa:
-            # Validate: token hash, scopes, and expiry (use dict.get() for safe access)
-            existing_hash = existing_sa.get("token_hash")
+        if active_sa:
+            # Active account exists: validate idempotency
+            existing_hash = active_sa.get("token_hash")
             if existing_hash != token_hash:
                 print(
                     f"ERROR: Service account {sa_name} exists with different token hash. Not mutating.",
@@ -78,7 +79,7 @@ def main():
                 )
                 sys.exit(1)
 
-            existing_scopes = existing_sa.get("scopes") or []
+            existing_scopes = active_sa.get("scopes") or []
             if set(existing_scopes) != set(sa_scopes):
                 print(
                     f"ERROR: Service account {sa_name} exists with different scopes. Not mutating.",
@@ -86,8 +87,9 @@ def main():
                 )
                 sys.exit(1)
 
-            existing_expiry = existing_sa.get("expires_at")
-            if existing_expiry is not None and existing_expiry < int(datetime.utcnow().timestamp()):
+            # Check expiry: expires_at <= now_epoch is expired
+            existing_expiry = active_sa.get("expires_at")
+            if existing_expiry is not None and existing_expiry <= now_epoch:
                 print(
                     f"ERROR: Service account {sa_name} has expired. Not mutating.",
                     file=sys.stderr,
@@ -98,7 +100,20 @@ def main():
             print(f"WHOS_AGENTOS_SERVICE_ACCOUNT_READY name={sa_name} scopes={len(sa_scopes)}")
             sys.exit(0)
 
-        # Service account does not exist: create it
+        # No active account: check if revoked account exists
+        latest_any = db.get_service_account_by_name(sa_name, include_revoked=True)
+
+        if latest_any:
+            # Account exists but is revoked: fail closed, do not recreate
+            revoked_at = latest_any.get("revoked_at")
+            if revoked_at is not None:
+                print(
+                    f"ERROR: Service account {sa_name} is revoked. Not mutating.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+        # No account at all (or only revoked): create new active account
         sa_id = str(uuid4())
         new_sa = ServiceAccount(
             id=sa_id,
@@ -122,3 +137,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
