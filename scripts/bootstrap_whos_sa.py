@@ -80,7 +80,12 @@ def main():
                 sys.exit(1)
 
             existing_scopes = active_sa.get("scopes") or []
-            if set(existing_scopes) != set(sa_scopes):
+            # Fail-closed: existing_scopes must be a list with exactly 4 values matching sa_scopes
+            if (
+                not isinstance(existing_scopes, list)
+                or len(existing_scopes) != 4
+                or set(existing_scopes) != set(sa_scopes)
+            ):
                 print(
                     f"ERROR: Service account {sa_name} exists with different scopes. Not mutating.",
                     file=sys.stderr,
@@ -113,7 +118,7 @@ def main():
                 )
                 sys.exit(1)
 
-        # No account at all (or only revoked): create new active account
+        # No account exists at all: create new active account
         sa_id = str(uuid4())
         new_sa = ServiceAccount(
             id=sa_id,
@@ -137,3 +142,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
