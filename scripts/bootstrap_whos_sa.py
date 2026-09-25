@@ -69,22 +69,25 @@ def main():
         existing_sa = db.get_service_account_by_name(sa_name, include_revoked=False)
 
         if existing_sa:
-            # Validate: token hash, scopes, and expiry
-            if existing_sa.token_hash != token_hash:
+            # Validate: token hash, scopes, and expiry (use dict.get() for safe access)
+            existing_hash = existing_sa.get("token_hash")
+            if existing_hash != token_hash:
                 print(
                     f"ERROR: Service account {sa_name} exists with different token hash. Not mutating.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
 
-            if set(existing_sa.scopes) != set(sa_scopes):
+            existing_scopes = existing_sa.get("scopes") or []
+            if set(existing_scopes) != set(sa_scopes):
                 print(
                     f"ERROR: Service account {sa_name} exists with different scopes. Not mutating.",
                     file=sys.stderr,
                 )
                 sys.exit(1)
 
-            if existing_sa.expires_at is not None and existing_sa.expires_at < int(datetime.utcnow().timestamp()):
+            existing_expiry = existing_sa.get("expires_at")
+            if existing_expiry is not None and existing_expiry < int(datetime.utcnow().timestamp()):
                 print(
                     f"ERROR: Service account {sa_name} has expired. Not mutating.",
                     file=sys.stderr,
@@ -119,3 +122,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
