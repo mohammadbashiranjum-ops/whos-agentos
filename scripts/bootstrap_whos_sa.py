@@ -11,10 +11,10 @@ After successful creation/validation, prints:
   WHOS_AGENTOS_SERVICE_ACCOUNT_READY name=whos-pee-option-a-v2 scopes=4
 """
 
-import os
-import sys
 import hashlib
 import json
+import os
+import sys
 from datetime import datetime, timedelta
 
 # Read environment
@@ -38,13 +38,13 @@ if not all([db_host, db_user, db_pass, db_name]):
     sys.exit(1)
 
 try:
-    import psycopg2
+    import psycopg
 except ImportError:
-    print("ERROR: psycopg2 not available; cannot bootstrap service account", file=sys.stderr)
+    print("ERROR: psycopg not available; cannot bootstrap service account", file=sys.stderr)
     sys.exit(1)
 
 try:
-    conn = psycopg2.connect(
+    conn = psycopg.connect(
         host=db_host,
         port=db_port,
         user=db_user,
@@ -85,7 +85,7 @@ try:
             cursor.close()
             conn.close()
             sys.exit(1)
-    
+
     # Service account does not exist: create it
     scopes_json = json.dumps(sa_scopes)
     cursor.execute(
@@ -97,7 +97,7 @@ try:
         (sa_name, token_hash, scopes_json, "owner-approved-whos-activation", expiry_date),
     )
     conn.commit()
-    
+
     print(f"WHOS_AGENTOS_SERVICE_ACCOUNT_READY name={sa_name} scopes={len(sa_scopes)}")
     cursor.close()
     conn.close()
@@ -109,7 +109,6 @@ except Exception as e:
         conn.rollback()
         cursor.close()
         conn.close()
-    except:
+    except Exception:
         pass
     sys.exit(1)
-
