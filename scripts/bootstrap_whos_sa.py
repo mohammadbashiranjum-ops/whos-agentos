@@ -29,7 +29,10 @@ The script itself never prints the plaintext token, its hash, or its prefix. A
 token that already belongs to any account is refused before an insert is tried,
 because agno's own logger echoes the insert parameters (hash and display prefix)
 when the database rejects one.
-Uses expires_at <= now_epoch for expiry check (Agno v3.0.4 convention).
+Uses expires_at <= now_epoch for expiry check (Agno v3.0.4 convention). READY also
+requires a real, bounded expiry: agno treats expires_at NULL as "never expires"
+and its schema allows NULL, so an account whose expiry is missing, non-integer, or
+further out than one grant (plus a day of clock slack) is refused, not reused.
 """
 
 import os
@@ -42,6 +45,28 @@ from agno.db.schemas.service_accounts import ServiceAccount
 from agno.os.service_accounts import TOKEN_DISPLAY_PREFIX_LENGTH, hash_token
 
 from db import get_postgres_db
+
+VALIDITY_SECONDS = 30 * 24 * 60 * 60
+EXPIRY_SLACK_SECONDS = 24 * 60 * 60
+
+
+def expiry_refusal(expires_at: object, now_epoch: int) -> str | None:
+    """Why an existing account's expiry cannot be accepted, or None if it can.
+
+    agno's ServiceAccount.is_expired() returns False for expires_at None, and the
+    column is nullable, so a NULL expiry authenticates forever. This bootstrap only
+    issues 30-day accounts, so READY demands exactly that: an integer epoch in the
+    future, no further out than one grant plus a day of clock slack.
+    """
+    if expires_at is None:
+        return "has no expiry (would never expire)"
+    if isinstance(expires_at, bool) or not isinstance(expires_at, int):
+        return "has a non-integer expiry"
+    if expires_at <= now_epoch:
+        return "has expired"
+    if expires_at > now_epoch + VALIDITY_SECONDS + EXPIRY_SLACK_SECONDS:
+        return "has an expiry beyond the 30-day grant"
+    return None
 
 
 def main():
@@ -78,7 +103,7 @@ def main():
         "agents:platform-engineer:run",
     ]
     now_epoch = int(time.time())
-    expires_at = now_epoch + (30 * 24 * 60 * 60)
+    expires_at = now_epoch + VALIDITY_SECONDS
     created_by = "owner-approved-whos-activation"
 
     try:
@@ -119,13 +144,9 @@ def main():
                 )
                 sys.exit(1)
 
-            # Check expiry: expires_at <= now_epoch is expired
-            existing_expiry = active_sa.get("expires_at")
-            if existing_expiry is not None and existing_expiry <= now_epoch:
-                print(
-                    f"ERROR: Service account {sa_name} has expired. Not mutating.",
-                    file=sys.stderr,
-                )
+            refusal = expiry_refusal(active_sa.get("expires_at"), now_epoch)
+            if refusal:
+                print(f"ERROR: Service account {sa_name} {refusal}. Not mutating.", file=sys.stderr)
                 sys.exit(1)
 
             # Idempotent success
