@@ -16,11 +16,21 @@ After successful creation/validation, prints:
   WHOS_AGENTOS_SERVICE_ACCOUNT_READY name=whos-pee-option-a-v2 scopes=4
 
 Token must start with 'agno_pat_' prefix.
+
+Renewal (the account is time-bounded to 30 days, and every path above fails
+closed, so an expired or rotated account can never be reused or overwritten):
+the account name is versioned. WHOS_PEE_AGENTOS_SA_NAME selects it, default
+whos-pee-option-a-v2, and must match whos-pee-option-a-v<N>. Renewing is a new
+version with a new token -- set WHOS_PEE_AGENTOS_SA_NAME=whos-pee-option-a-v3
+and a freshly minted WHOS_PEE_AGENTOS_TOKEN, then deploy. The new account is
+created exactly as above; the old one is left to expire (or be revoked) and is
+never touched. No row is deleted and no pre-deploy setting changes.
 Never prints plaintext token, hash, or prefix.
 Uses expires_at <= now_epoch for expiry check (Agno v3.0.4 convention).
 """
 
 import os
+import re
 import sys
 import time
 from uuid import uuid4
@@ -54,7 +64,10 @@ def main():
         sys.exit(1)
 
     # Service account details
-    sa_name = "whos-pee-option-a-v2"
+    sa_name = os.getenv("WHOS_PEE_AGENTOS_SA_NAME") or "whos-pee-option-a-v2"
+    if not re.fullmatch(r"whos-pee-option-a-v[1-9][0-9]*", sa_name):
+        print("ERROR: WHOS_PEE_AGENTOS_SA_NAME must match whos-pee-option-a-v<N>", file=sys.stderr)
+        sys.exit(1)
     sa_scopes = [
         "config:read",
         "sessions:read",
@@ -136,7 +149,9 @@ def main():
         sys.exit(0)
 
     except Exception as e:
-        print(f"ERROR: Service account bootstrap failed: {e}", file=sys.stderr)
+        # The exception's class only: a database error's text carries the SQL
+        # parameters, which here include the token hash and display prefix.
+        print(f"ERROR: Service account bootstrap failed: {type(e).__name__}", file=sys.stderr)
         sys.exit(1)
 
 
