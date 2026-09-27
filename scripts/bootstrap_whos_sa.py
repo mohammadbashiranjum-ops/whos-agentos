@@ -25,7 +25,10 @@ version with a new token -- set WHOS_PEE_AGENTOS_SA_NAME=whos-pee-option-a-v3
 and a freshly minted WHOS_PEE_AGENTOS_TOKEN, then deploy. The new account is
 created exactly as above; the old one is left to expire (or be revoked) and is
 never touched. No row is deleted and no pre-deploy setting changes.
-Never prints plaintext token, hash, or prefix.
+The script itself never prints the plaintext token, its hash, or its prefix. A
+token that already belongs to any account is refused before an insert is tried,
+because agno's own logger echoes the insert parameters (hash and display prefix)
+when the database rejects one.
 Uses expires_at <= now_epoch for expiry check (Agno v3.0.4 convention).
 """
 
@@ -79,7 +82,18 @@ def main():
     created_by = "owner-approved-whos-activation"
 
     try:
-        # First query: check for active (not revoked) account
+        # A token is one credential for one account. Checked first, and on a read
+        # that raises instead of returning None, so a database that cannot answer
+        # stops the script here rather than letting the checks below read "absent".
+        owner = db.get_service_account_by_token_hash(token_hash)
+        if owner and owner.get("name") != sa_name:
+            print(
+                f"ERROR: Token already belongs to another service account; mint a new one for {sa_name}. Not mutating.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # Then: check for an active (not revoked) account by name
         active_sa = db.get_service_account_by_name(sa_name, include_revoked=False)
 
         if active_sa:
