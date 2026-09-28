@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from os import getenv
 from pathlib import Path
 
+from agno.job_queue import QueueConfig
 from agno.os import AgentOS, MCPConfig
 from agno.os.config import AuthorizationConfig
 from agno.utils.log import log_info
@@ -110,6 +111,14 @@ agent_os = AgentOS(
         ],
     ),
     mcp_auth=mcp_auth,
+    # Durable background runs. Acceptance of `background=true` becomes a
+    # committed queue row, so a run survives a redeploy and an
+    # `Idempotency-Key` re-POST returns the original run instead of starting a
+    # second one. WHOS's Option-A adapter re-dispatches with the same key when
+    # a run outlives its read-back window; without this the key is ignored and
+    # every retry is a new provider run. max_attempts=1 (the default) fails a
+    # crashed run visibly rather than re-running it.
+    queue=QueueConfig(durable=True),
     lifespan=lifespan,
     db=get_postgres_db(),
     knowledge=[shared_knowledge, product_knowledge],
