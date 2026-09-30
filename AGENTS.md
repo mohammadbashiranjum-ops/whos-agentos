@@ -76,7 +76,7 @@ cp example.env .env
 docker compose up -d --build
 ```
 
-The first boot opens MCP connections to `https://docs.agno.com/mcp` and — unless `PARALLEL_API_KEY` is set — `https://search.parallel.ai/mcp`. AgentOS connects them in its lifespan, so the API does not start if either host is unreachable; behind a proxy or firewall, allow both, or set `PARALLEL_API_KEY` to drop the second.
+The first boot opens MCP connections to `https://docs.agno.com/mcp` and — unless `PARALLEL_API_KEY` is set — `https://search.parallel.ai/mcp`. AgentOS connects them in its lifespan, and a failed connect there leaks an anyio cancel scope that fails startup or cancels the lifespan later (taking the job-queue worker with it while HTTP keeps serving). So `app/tools.py` first runs one real MCP handshake per host on a throwaway event loop: a host that does not complete it is not registered at all, with a `… MCP skipped` warning, and the platform boots without that toolkit — restart to pick it up once the host is back. The probe narrows the window rather than closing it: a host that passes the probe and then fails the lifespan's own connect seconds later still hits agno's lifespan. Behind a proxy or firewall, allow both hosts, or set `PARALLEL_API_KEY` to drop the second.
 
 `compose.yaml` sets `RUNTIME_ENV=dev`, `AGNO_DEBUG=True`, and `WAIT_FOR_DB=True` so JWT is off and the API blocks on the DB before serving. It runs uvicorn with a scoped `--reload` (watching `agents/`, `app/`, `db/`, `evals/`, `teams/`, `workflows/`), so code edits hot-reload in a second or two. Restart `agentos-api` after dependency or env changes, or whenever you want a guaranteed-clean state.
 

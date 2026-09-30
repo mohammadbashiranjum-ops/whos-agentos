@@ -12,8 +12,6 @@ Agno is a multi-agent team made of:
 The Agno team is available in Slack, claude.ai, ChatGPT, or the AgentOS UI.
 """
 
-from os import getenv
-
 from agno.learn import (
     EntityMemoryConfig,
     LearningMachine,
@@ -22,8 +20,6 @@ from agno.learn import (
     UserProfileConfig,
 )
 from agno.team import Team
-from agno.tools.mcp import MCPTools
-from agno.tools.parallel import ParallelTools
 from agno.tools.studio_runner import StudioRunnerTools
 
 from agents.builder import platform_builder
@@ -33,18 +29,13 @@ from app.notes import notes
 from app.offload import result_store
 from app.registry import registry
 from app.settings import default_model
+from app.tools import get_parallel_tools
 from db import get_postgres_db
 
-# When PARALLEL_API_KEY is set, use the parallel-web SDK.
-# Without a key, fall back to the keyless MCP.
-# AgentOS handles MCP connect/close as part of its lifespan.
-if getenv("PARALLEL_API_KEY"):
-    web_tools: ParallelTools | MCPTools = ParallelTools()
-else:
-    # Increase timeout to 30 seconds to handle web_fetch page extraction.
-    web_tools = MCPTools(
-        url="https://search.parallel.ai/mcp", transport="streamable-http", name="parallel_tools", timeout_seconds=30
-    )
+# Web tools: the parallel-web SDK when PARALLEL_API_KEY is set, the keyless MCP
+# otherwise -- and nothing, with a warning, when that MCP host is unreachable at
+# startup, because AgentOS connects MCPs in its lifespan (see app/tools.py).
+web_tools = get_parallel_tools()
 
 # The Agno team's memory: per-user profile and memory, and a shared entity store.
 memory = LearningMachine(
@@ -119,7 +110,7 @@ agno_team = Team(
     offload_tool_results=result_store,
     # The learning machine attaches its tools, guidance, and recall automatically.
     learning=memory,
-    tools=[notes.tools(), web_tools, studio_runners],
+    tools=[notes.tools(), *web_tools, studio_runners],
     members=[platform_builder, platform_manager, platform_engineer],
     instructions=[INSTRUCTIONS, notes.instructions()],
     # Identity fallback for unauthenticated runs (dev MCP, evals).
