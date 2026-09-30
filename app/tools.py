@@ -80,6 +80,73 @@ def _mcp_host_reachable_cached(url: str) -> bool:
     return False
 
 
+class IsolatedMCPTools(MCPTools):
+    """MCPTools whose connection lives in a task of its own, never the caller's.
+
+    agno's AgentOS calls connect() from inside the app lifespan. A failed
+    streamable-http connect leaks the anyio cancel scope it entered, and that
+    scope keeps cancelling the task that entered it: the lifespan task, which
+    fails startup or is cancelled later with the job-queue worker stopped while
+    HTTP keeps serving. The startup probe cannot prevent that when a host passes
+    the probe and fails this connect a moment later.
+
+    Here connect() hands the whole connection to an owner task: the owner enters
+    the transport, holds it open until close(), and exits it -- the same task
+    throughout, which is what the transport requires. A connect that fails leaks
+    into the owner, which then ends; the caller only waits for the outcome and
+    is never the scope's host. Tool calls use the session from any task, as they
+    already did when the lifespan owned it.
+    """
+
+    _owner_task: asyncio.Task[None] | None = None
+    _owner_stop: asyncio.Event | None = None
+
+    # MCPTools already overrides the sync Toolkit hooks with coroutines, untyped.
+    async def connect(self, force: bool = False) -> None:  # type: ignore[override]
+        if force:
+            await self.close()
+        if self.initialized:
+            return
+        if self._owner_task is not None and not self._owner_task.done():
+            return  # a connect is already in flight, or holding a session open
+
+        ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        stop = asyncio.Event()
+
+        async def own() -> None:
+            try:
+                await MCPTools.connect(self)
+            except BaseException as exc:  # the leaked scope cancels this task, not the caller
+                log_warning(f"{self.name} MCP connect failed in its owner task ({type(exc).__name__})")
+            finally:
+                if not ready.done():
+                    ready.set_result(None)
+            if not self.initialized:
+                return
+            try:
+                await stop.wait()
+            finally:
+                with suppress(BaseException):
+                    await MCPTools.close(self)
+
+        self._owner_stop = stop
+        self._owner_task = asyncio.create_task(own(), name=f"mcp-owner:{self.name}")
+        await asyncio.shield(ready)
+        if not self.initialized:
+            log_warning(f"{self.name} MCP not connected; its tools are unavailable until a later connect succeeds")
+
+    async def close(self) -> None:  # type: ignore[override]
+        owner, stop = self._owner_task, self._owner_stop
+        self._owner_task = self._owner_stop = None
+        if owner is None:
+            await MCPTools.close(self)
+            return
+        if stop is not None:
+            stop.set()
+        with suppress(BaseException):
+            await asyncio.wait_for(asyncio.shield(owner), MCP_PROBE_TIMEOUT_SECONDS)
+
+
 def get_agno_docs_tools() -> list[MCPTools]:
     """The Agno docs MCP, only when its host answers at startup.
 
@@ -88,14 +155,14 @@ def get_agno_docs_tools() -> list[MCPTools]:
     fails, or the lifespan is cancelled later and takes the job-queue worker with
     it while HTTP keeps serving. agno_docs is optional, so an unreachable host
     means the toolkit is not registered at all; restart to pick it up again.
-    The probe narrows the window, it cannot close it: a host that completes the
-    probe's handshake and then fails the lifespan's own connect a moment later
-    still reaches agno's lifespan.
+    A host that passes the probe and fails the lifespan's own connect a moment
+    later is contained by IsolatedMCPTools instead: the toolkit stays
+    unconnected and the lifespan keeps running.
     """
     if not _mcp_host_reachable_cached(AGNO_DOCS_MCP_URL):
         log_warning("agno_docs MCP skipped: host not reachable at startup, toolkit not registered")
         return []
-    return [MCPTools(transport="streamable-http", url=AGNO_DOCS_MCP_URL, name="agno_docs")]
+    return [IsolatedMCPTools(transport="streamable-http", url=AGNO_DOCS_MCP_URL, name="agno_docs")]
 
 
 def get_parallel_tools() -> list[ParallelTools | MCPTools]:
@@ -108,7 +175,7 @@ def get_parallel_tools() -> list[ParallelTools | MCPTools]:
         return []
     # timeout_seconds: web_fetch page extraction regularly exceeds the 10s MCP default.
     return [
-        MCPTools(
+        IsolatedMCPTools(
             url=PARALLEL_MCP_URL,
             transport="streamable-http",
             name="parallel_tools",

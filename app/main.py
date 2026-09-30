@@ -15,6 +15,7 @@ from agno.utils.log import log_info
 from agents.builder import platform_builder
 from agents.engineer import platform_engineer
 from agents.manager import platform_manager
+from app.health import install_queue_worker_health
 from app.knowledge import product_knowledge, shared_knowledge
 from app.registry import registry
 from app.schedules import register_schedules
@@ -130,6 +131,9 @@ agent_os = AgentOS(
     config=str(Path(__file__).parent / "config.yaml"),
 )
 app = agent_os.get_app()
+# /health fails (503) once the durable queue's worker is gone, instead of
+# answering ok while accepted background runs can never execute.
+install_queue_worker_health(app)
 
 
 if __name__ == "__main__":
