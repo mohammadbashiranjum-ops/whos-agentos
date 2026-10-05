@@ -6,6 +6,11 @@ on:
     types: [opened, synchronize, reopened]
     branches: [main]
 
+# The gate only reads the checkout. Pinning the token to contents:read keeps
+# it least-privilege whatever the repository's default workflow permission is.
+permissions:
+  contents: read
+
 env:
   UV_SYSTEM_PYTHON: 1
 
