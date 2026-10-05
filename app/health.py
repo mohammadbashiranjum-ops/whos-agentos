@@ -11,12 +11,16 @@ healthcheck stays green.
 `install_queue_worker_health(app)` puts a check in front of that route: when the
 app has a queue worker and it is no longer running, `/health` answers 503. With
 no queue configured, or before the lifespan has started it, agno's answer stands.
+
+The same check answers `HEAD /health`, which agno's GET-only route refused. HEAD
+is what an uptime monitor sends by default (UptimeRobot's in production), so it
+read a healthy platform as down. HEAD gets the status GET would get, and no body.
 """
 
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 HEALTH_PATH = "/health"
 
@@ -37,7 +41,12 @@ def queue_worker_alive(app: Any) -> bool | None:
 def install_queue_worker_health(app: FastAPI) -> None:
     @app.middleware("http")
     async def queue_worker_health(request: Request, call_next: Any) -> Any:
-        if request.url.path == HEALTH_PATH and queue_worker_alive(request.app) is False:
+        if request.url.path != HEALTH_PATH:
+            return await call_next(request)
+        dead = queue_worker_alive(request.app) is False
+        if request.method == "HEAD":
+            return Response(status_code=503 if dead else 200)
+        if dead:
             return JSONResponse(
                 status_code=503,
                 content={"status": "unhealthy", "reason": "job queue worker is not running"},
