@@ -252,6 +252,31 @@ class QueueWorkerHealthTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body.get("status"), "ok")
 
+    def _head(self, worker: object | None) -> tuple[int, bytes]:
+        from starlette.testclient import TestClient
+
+        app = self._app()
+        client = TestClient(app)
+        if worker is not None:
+            app.state.queue_worker = worker
+        response = client.head("/health")
+        return response.status_code, response.content
+
+    def test_head_health_answers_like_get(self) -> None:
+        # UptimeRobot's default HTTP monitor probes with HEAD. agno's /health is
+        # GET-only, so production answered 404 and the monitor read the platform
+        # as down every five minutes while GET kept answering 200.
+        for worker in (None, _FakeWorker(running=True, task_done=False)):
+            code, body = self._head(worker)
+            self.assertEqual(code, 200, worker)
+            self.assertEqual(body, b"")
+
+    def test_head_health_fails_when_the_worker_is_dead(self) -> None:
+        for worker in (_FakeWorker(running=False, task_done=None), _FakeWorker(running=True, task_done=True)):
+            code, body = self._head(worker)
+            self.assertEqual(code, 503, worker)
+            self.assertEqual(body, b"")
+
     def test_main_app_installs_the_worker_health_check(self) -> None:
         # app.main needs a database to import, so check the wiring in its source.
         source = (REPO_ROOT / "app" / "main.py").read_text()
