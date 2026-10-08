@@ -1,0 +1,10 @@
+# AgentOS Railway variables for the gated Parallel Execution workflow
+# Keep real token/key values only in Railway's variable manager.
+WHOS_PARALLEL_EXECUTION_ENABLED=false
+HATCHET_TOKEN=
+HATCHET_URL=https://<hatchet-control-plane>:<grpc-port>
+HATCHET_RUNNABLE_NAME=whos-execute-authorized-unit
+HATCHET_RUNNABLE_KIND=standalone
+LIBREFANG_URL=https://<librefang-runtime-domain>
+LIBREFANG_API_KEY=
+LIBREFANG_AGENT_IDS=<owner-verified-agent-id>

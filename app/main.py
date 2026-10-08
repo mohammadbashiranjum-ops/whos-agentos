@@ -22,6 +22,7 @@ from app.schedules import register_schedules
 from db import get_postgres_db
 from teams.lead import agno_team
 from workflows.deployment_check import deployment_check
+from workflows.parallel_execution import parallel_execution
 from workflows.run_evals import run_evals
 
 # ---------------------------------------------------------------------------
@@ -125,7 +126,7 @@ agent_os = AgentOS(
     knowledge=[shared_knowledge, product_knowledge],
     agents=[platform_builder, platform_manager, platform_engineer],
     teams=[agno_team],
-    workflows=[deployment_check, run_evals],
+    workflows=[deployment_check, run_evals, parallel_execution],
     interfaces=interfaces,
     registry=registry,
     config=str(Path(__file__).parent / "config.yaml"),

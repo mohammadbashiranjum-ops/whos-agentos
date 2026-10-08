@@ -10,8 +10,11 @@ authors = [{ name = "Agno", email = "hello@agno.com" }]
 dependencies = [
   "agno[os,mcp,slack,pgvector,psycopg,csv,excel,docx,pdf,website]==3.0.4",
   "cel-python",
+  "hatchet-sdk==1.41.1",
+  "httpx>=0.27,<1",
   "openai",
   "parallel-web",
+  "pydantic>=2.6,<3",
   "python-dotenv",
   "reportlab",
 ]
