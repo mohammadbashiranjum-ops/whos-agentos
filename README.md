@@ -112,6 +112,8 @@ Token-Based Auth gives you three things:
 2. **Per-request identity.** Middleware parses the token and extracts the `user_id`, `session_id`, and custom claims. Each request is tied to a user and session, giving you auditability and traceability.
 3. **Granular permissions.** Scopes on the token decide what each caller can do — run agents, read sessions, manage the platform. Admin tokens can do everything; scoped tokens get exactly what their claims grant.
 
+The WHOS PEE service-account profile and its narrowly guarded v3 scope grant are documented in [`docs/whos-pee-service-account.md`](docs/whos-pee-service-account.md).
+
 During `./scripts/railway/up.sh`, the script creates your Railway domain and pauses so you can mint the key before the app starts.
 
 1. Open [os.agno.com](https://os.agno.com?utm_source=github&utm_medium=template&utm_campaign=agentos-railway), click **Connect OS** → **Live**, and enter your Railway domain.
