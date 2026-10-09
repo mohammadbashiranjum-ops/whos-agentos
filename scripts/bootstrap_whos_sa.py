@@ -246,14 +246,20 @@ def main():
         latest_any = db.get_service_account_by_name(sa_name, include_revoked=True)
 
         if latest_any:
-            # Account exists but is revoked: fail closed, do not recreate
+            # An account appearing between the active and inclusive lookups is
+            # also an existing state; never race it with a duplicate insert.
             revoked_at = latest_any.get("revoked_at")
             if revoked_at is not None:
                 print(
                     f"ERROR: Service account {sa_name} is revoked. Not mutating.",
                     file=sys.stderr,
                 )
-                sys.exit(1)
+            else:
+                print(
+                    f"ERROR: Service account {sa_name} has an unexpected existing state. Not mutating.",
+                    file=sys.stderr,
+                )
+            sys.exit(1)
 
         # No account exists at all: create new active account
         sa_id = str(uuid4())
