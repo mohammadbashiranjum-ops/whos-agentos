@@ -123,12 +123,18 @@ class FakeDb:
         self.created: list[dict[str, Any]] = []
         self.scope_updates = 0
         self.fail_scope_update = False
+        self.active_lookup_miss_once = False
+        self.active_name_lookups = 0
         self.table = FakeTable()
 
     def get_service_account_by_token_hash(self, token_hash: str) -> dict[str, Any] | None:
         return next((row for row in self.rows if row["token_hash"] == token_hash), None)
 
     def get_service_account_by_name(self, name: str, include_revoked: bool = False) -> dict[str, Any] | None:
+        if not include_revoked:
+            self.active_name_lookups += 1
+            if self.active_lookup_miss_once and self.active_name_lookups == 1:
+                return None
         for row in self.rows:
             if row["name"] == name and (include_revoked or row.get("revoked_at") is None):
                 return row
@@ -183,11 +189,17 @@ def load_script(db: FakeDb) -> types.ModuleType:
 
 
 def run_bootstrap(
-    rows: list[dict[str, Any]], token: str = TOKEN, account_name: str | None = None, *, fail_update: bool = False
+    rows: list[dict[str, Any]],
+    token: str = TOKEN,
+    account_name: str | None = None,
+    *,
+    fail_update: bool = False,
+    active_lookup_miss_once: bool = False,
 ) -> tuple[int, str, FakeDb]:
     """Run main() once; return (exit code, combined output, the fake DB)."""
     db = FakeDb(rows)
     db.fail_scope_update = fail_update
+    db.active_lookup_miss_once = active_lookup_miss_once
     module = load_script(db)
     out = io.StringIO()
     env = {"WHOS_PEE_AGENTOS_TOKEN": token}
@@ -355,6 +367,17 @@ class V3ScopeGrant(unittest.TestCase):
         self.assertEqual(row["scopes"], BASE_SCOPES)
         self.assertEqual(db.created, [])
         self.assertEqual(db.scope_updates, 0)
+
+    def test_active_row_found_by_inclusive_second_lookup_is_not_recreated(self) -> None:
+        other_token = "agno_pat_" + "c" * 64
+        row = active_row(int(time.time()) + DAY, name=V3_NAME, token=other_token)
+        original = dict(row)
+        code, out, db = run_bootstrap([row], account_name=V3_NAME, active_lookup_miss_once=True)
+        self.assertEqual(code, 1, out)
+        self.assertIn("unexpected existing state", out)
+        self.assertEqual(db.created, [])
+        self.assertEqual(db.scope_updates, 0)
+        self.assertEqual(row, original)
 
 
 class FreshAccount(unittest.TestCase):
