@@ -21,6 +21,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from app.integrations.parallel_execution import (  # noqa: E402
     ENABLE_ENV,
+    HANDOFF_STRING_FIELDS,
+    MAX_HANDOFF_PATH_CHARS,
+    MAX_HANDOFF_TARGETS,
+    MAX_HATCHET_RESULT_BYTES,
     MAX_LIBREFANG_RESPONSE_BYTES,
     IntegrationConfigurationError,
     ParallelExecutionConfig,
@@ -76,7 +80,7 @@ class _FakeRunnable:
             self.client.started.set()
         if self.client.agent_started is not None:
             await asyncio.wait_for(self.client.agent_started.wait(), timeout=2)
-        return {"receipt": "REAL_WORK", "execution_id": "EXEC-1"}
+        return {"receipt": "REAL_WORK", "execution_id": "EXEC-1", "api_token": "secret-worker-token"}
 
 
 class _FakeHatchetClient:
@@ -212,6 +216,7 @@ class ParallelExecutionIntegrationTests(unittest.IsolatedAsyncioTestCase):
             token="fake-hatchet-token",
             host_port="hatchet.example.test:7070",
             tls_config=tls_config.return_value,
+            grpc_max_recv_message_length=MAX_HATCHET_RESULT_BYTES,
         )
         hatchet.assert_called_once_with(config=client_config.return_value)
         _cached_hatchet_client.cache_clear()
@@ -232,6 +237,29 @@ class ParallelExecutionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         extended = {**valid, "arbitrary": "must not be forwarded"}
         with self.assertRaisesRegex(ValueError, "outside the WHOS handoff contract"):
             validate_whos_handoff(extended)
+
+    def test_handoff_requires_typed_bounded_identity_and_path_fields(self) -> None:
+        for field in HANDOFF_STRING_FIELDS:
+            with self.subTest(field=field):
+                malformed = _handoff()
+                malformed[field] = {"untrusted": "coercion"}
+                with self.assertRaisesRegex(ValueError, field):
+                    validate_whos_handoff(malformed)
+
+        with self.assertRaisesRegex(ValueError, "write_targets"):
+            validate_whos_handoff({**_handoff(), "write_targets": ["safe.py", {"path": "x"}]})
+        with self.assertRaisesRegex(ValueError, "write_targets"):
+            validate_whos_handoff({**_handoff(), "write_targets": ["bad\npath"]})
+        with self.assertRaisesRegex(ValueError, "write_targets"):
+            validate_whos_handoff({**_handoff(), "write_targets": ["x" * (MAX_HANDOFF_PATH_CHARS + 1)]})
+        with self.assertRaisesRegex(ValueError, "write_targets"):
+            validate_whos_handoff({**_handoff(), "write_targets": ["x.py"] * (MAX_HANDOFF_TARGETS + 1)})
+        with self.assertRaisesRegex(ValueError, "generation"):
+            validate_whos_handoff({**_handoff(), "generation": 2**31})
+        with self.assertRaisesRegex(ValueError, "claim_id"):
+            validate_whos_handoff({**_handoff(), "claim_id": "C" * 257})
+        with self.assertRaisesRegex(ValueError, "keys must be strings"):
+            validate_whos_handoff({**_handoff(), 7: "invalid JSON object key"})
 
     async def test_hatchet_and_multiple_librefang_agents_run_concurrently(self) -> None:
         hatchet_started = asyncio.Event()
@@ -256,7 +284,9 @@ class ParallelExecutionIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["request_id"], "request-1")
-        self.assertEqual(result["hatchet"]["result"]["receipt"], "REAL_WORK")
+        self.assertEqual(result["hatchet"]["result"], {"present": True, "type": "dict"})
+        self.assertNotIn("REAL_WORK", json.dumps(result["hatchet"]))
+        self.assertNotIn("secret-worker-token", json.dumps(result))
         self.assertEqual(fake_client.target_kind, "standalone")
         self.assertEqual(fake_client.target_name, "whos-execute-authorized-unit")
         self.assertEqual(len(fake_client.calls), 1)
@@ -384,9 +414,11 @@ class ParallelExecutionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("full agent turn", docs)
         self.assertIn("does not enforce read-only behavior", docs)
         self.assertIn("one active combined execution per AgentOS process", docs)
-        self.assertIn("live WHOS service credential's scopes could not be verified", docs)
+        self.assertIn("resource-specific `workflows:parallel-execution:run` scope", docs)
         self.assertIn("scheme-less gRPC `host:port` target", docs)
         self.assertIn("ClientTLSConfig.server_name", docs)
+        self.assertIn("gRPC receive size is capped at 256 KiB", docs)
+        self.assertIn("Raw Hatchet result content is never copied", docs)
         self.assertNotIn("The existing WHOS AgentOS service credential has only", docs)
 
     def test_main_registers_workflow_without_scheduling_it(self) -> None:

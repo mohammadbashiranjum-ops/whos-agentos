@@ -24,8 +24,11 @@ import httpx
 ENABLE_ENV = "WHOS_PARALLEL_EXECUTION_ENABLED"
 MAX_LIBREFANG_AGENTS = 3
 MAX_HANDOFF_BYTES = 64 * 1024
+MAX_HANDOFF_TARGETS = 128
+MAX_HANDOFF_PATH_CHARS = 1024
 MAX_LIBREFANG_RESPONSE_BYTES = 256 * 1024
 MAX_LIBREFANG_RESPONSE_CHARS = 20_000
+MAX_HATCHET_RESULT_BYTES = 256 * 1024
 HATCHET_RESULT_TIMEOUT_SECONDS = 600.0
 LIBREFANG_TIMEOUT_SECONDS = 120.0
 LIBREFANG_TOTAL_TIMEOUT_SECONDS = 150.0
@@ -44,6 +47,21 @@ HANDOFF_FIELDS = (
     "source_run",
     "source_head",
     "write_targets",
+    "traversal_id",
+    "idempotency_key",
+    "owner_acknowledgement_evidence_id",
+    "owner_delivery_id",
+    "handoff_digest",
+)
+HANDOFF_STRING_FIELDS = (
+    "claim_id",
+    "claim_evidence_id",
+    "task_id",
+    "command_id",
+    "work_unit",
+    "lane",
+    "source_run",
+    "source_head",
     "traversal_id",
     "idempotency_key",
     "owner_acknowledgement_evidence_id",
@@ -187,28 +205,47 @@ def validate_whos_handoff(value: Any) -> dict[str, Any]:
         raise ValueError("hatchet_payload must be an object.")
 
     payload = dict(value)
-    missing = [field for field in HANDOFF_FIELDS if field not in payload or payload[field] in (None, "", [])]
+    if any(not isinstance(field, str) for field in payload):
+        raise ValueError("hatchet_payload keys must be strings.")
+    missing = [field for field in HANDOFF_FIELDS if field not in payload]
     if missing:
         raise ValueError(f"hatchet_payload is missing required handoff fields: {', '.join(missing)}.")
     unexpected = sorted(set(payload) - set(HANDOFF_FIELDS))
     if unexpected:
         raise ValueError("hatchet_payload contains fields outside the WHOS handoff contract.")
+    for field_name in HANDOFF_STRING_FIELDS:
+        item = payload[field_name]
+        if not isinstance(item, str):
+            raise ValueError(f"handoff {field_name} must be a string.")
+        if not item or not _IDENTITY_PATTERN.fullmatch(item):
+            raise ValueError(f"handoff {field_name} must be a bounded safe identity.")
     if (
         isinstance(payload["generation"], bool)
         or not isinstance(payload["generation"], int)
         or payload["generation"] < 1
+        or payload["generation"] > 2**31 - 1
     ):
-        raise ValueError("handoff generation must be a positive integer.")
+        raise ValueError("handoff generation must be a positive 32-bit integer.")
     targets = payload["write_targets"]
     if (
         not isinstance(targets, list)
         or not targets
-        or any(not isinstance(item, str) or not item.strip() for item in targets)
+        or len(targets) > MAX_HANDOFF_TARGETS
+        or any(
+            not isinstance(item, str)
+            or not item.strip()
+            or len(item) > MAX_HANDOFF_PATH_CHARS
+            or item != item.strip()
+            or any(ord(char) < 32 or ord(char) == 127 for char in item)
+            for item in targets
+        )
     ):
-        raise ValueError("handoff write_targets must be a non-empty list of paths.")
-    if not _IDENTITY_PATTERN.fullmatch(str(payload["idempotency_key"])):
+        raise ValueError(
+            "handoff write_targets must be a bounded list of non-empty path strings without control characters."
+        )
+    if not _IDENTITY_PATTERN.fullmatch(payload["idempotency_key"]):
         raise ValueError("handoff idempotency_key is not a safe identity.")
-    if not _DIGEST_PATTERN.fullmatch(str(payload["handoff_digest"])):
+    if not _DIGEST_PATTERN.fullmatch(payload["handoff_digest"]):
         raise ValueError("handoff_digest must be a SHA-256 hex digest.")
 
     try:
@@ -230,6 +267,7 @@ def _cached_hatchet_client(token: str, host_port: str, tls_strategy: str, server
         token=token,
         host_port=host_port,
         tls_config=ClientTLSConfig(strategy=tls_strategy, server_name=server_name),
+        grpc_max_recv_message_length=MAX_HATCHET_RESULT_BYTES,
     )
     return Hatchet(config=config)
 
@@ -249,11 +287,9 @@ def _remote_standalone_declaration(_input: Any, _ctx: Any) -> dict[str, Any]:
     raise RuntimeError("This AgentOS client declaration is not a Hatchet worker.")
 
 
-def _json_safe(value: Any) -> Any:
-    try:
-        return json.loads(json.dumps(value, default=str, allow_nan=False))
-    except TypeError, ValueError, RecursionError:
-        return {"unserializable_result_type": type(value).__name__}
+def _hatchet_result_metadata(value: Any) -> dict[str, Any]:
+    """Never copy worker/provider result content into AgentOS output or logs."""
+    return {"present": value is not None, "type": type(value).__name__[:64]}
 
 
 def _clip_text(value: str) -> str:
@@ -320,7 +356,7 @@ async def _run_hatchet(
             "provider": "hatchet",
             "runnable_name": config.hatchet_runnable_name,
             "status": "completed",
-            "result": _json_safe(result),
+            "result": _hatchet_result_metadata(result),
         }
     except Exception as exc:  # provider exceptions must not reveal tokens or request contents
         failure = _provider_failure("hatchet", exc)
