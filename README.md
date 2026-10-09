@@ -246,11 +246,16 @@ Because the repo is managed by coding agents, it moves fast. Run `/review-and-im
 | `EVALS_CASE_TIMEOUT_SECONDS` | no | `90` | Default per-case timeout for run-evals runs; applies only to cases that don't set their own `timeout_seconds`. |
 | `EVALS_SUITE_TIMEOUT_SECONDS` | no | derived | Whole-suite timeout for run-evals runs; per-case timeouts are the granular limit. Unset, it is derived from the cases the tag selects. Set it to override. |
 | `PARALLEL_API_KEY` | no | none | Authenticates Agno's and the Studio registry's web search tools (Parallel SDK when set; keyless MCP fallback). Also the fast route for ingesting a product's docs — clean markdown per page, JS-rendered pages and PDFs included; without it ingestion still works, page by page, just slower. |
+| `WHOS_PARALLEL_EXECUTION_ENABLED` | no | `false` | Explicitly enables external Hatchet/LibreFang calls; keep false until Owner approval because configured agents may incur provider charges. |
+| `HATCHET_TOKEN` / `HATCHET_URL` / `HATCHET_RUNNABLE_NAME` | when enabled | none | Hatchet tenant token, gRPC control-plane HTTPS origin, and exact registered runnable name. `HATCHET_RUNNABLE_KIND` is `workflow` (default) or `standalone` for the current WHOS worker tasks. |
+| `LIBREFANG_URL` / `LIBREFANG_API_KEY` / `LIBREFANG_AGENT_IDS` | when enabled | none | LibreFang API origin, Bearer key, and comma-separated allowlist of 1–3 existing agents. Keep secrets in Railway variables; see [Parallel Execution integration](docs/parallel-execution.md). |
 | `SLACK_BOT_TOKEN` / `SLACK_SIGNING_SECRET` | no | none | Both must be set to enable the Slack interface. The bot token also lights up the registry's send-only Slack toolkit for built agents. |
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASS` / `DB_DATABASE` | no | matches compose | Postgres connection. |
 | `DB_DRIVER` | no | `postgresql+psycopg` | SQLAlchemy driver. |
 | `AGNO_DEBUG` | no | `False` | If `True`, Agno emits verbose debug logs. Compose sets this for dev. |
 | `WAIT_FOR_DB` | no | `False` | If `True`, the entrypoint blocks on the DB before starting. Compose sets this. |
+
+The `parallel-execution` workflow is on-demand only, disabled by default, and requires a valid WHOS handoff plus a caller authorized to run workflows. See [the setup and API contract](docs/parallel-execution.md); no provider calls happen during app startup or health checks.
 
 ## Learn more
 

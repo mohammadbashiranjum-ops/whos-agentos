@@ -168,6 +168,7 @@ def _check_reference_components() -> CheckResult:
         from agents.manager import platform_manager
         from app.registry import registry
         from teams.lead import agno_team
+        from workflows.parallel_execution import parallel_execution
         from workflows.run_evals import run_evals
     except Exception as exc:
         return _fail("Components", f"Could not import reference components: {exc}")
@@ -179,7 +180,9 @@ def _check_reference_components() -> CheckResult:
             if component_id
         ]
     )
-    workflow_ids = sorted([workflow_id for workflow_id in (deployment_check.id, run_evals.id) if workflow_id])
+    workflow_ids = sorted(
+        [workflow_id for workflow_id in (deployment_check.id, run_evals.id, parallel_execution.id) if workflow_id]
+    )
     return _pass(
         "Components",
         "Reference components import cleanly: "

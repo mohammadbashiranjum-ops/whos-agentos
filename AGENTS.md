@@ -16,7 +16,8 @@ AgentOS  (app/main.py)
 ├── Platform Manager (agents/manager.py)  — runtime lens: AgentOSTools read-only ops toolkit + deployment-check tools
 ├── Platform Engineer (agents/engineer.py) — source lens: read-only workspace tools (read/list/search) over the repo
 ├── DeployCheck      (workflows/deployment_check.py) — deterministic readiness workflow
-└── RunEvals         (workflows/run_evals.py) — opt-in eval suite workflow
+├── RunEvals         (workflows/run_evals.py) — opt-in eval suite workflow
+└── ParallelExecution(workflows/parallel_execution.py) — on-demand Hatchet/LibreFang fan-out, disabled by default
 ```
 
 Shared:
@@ -54,9 +55,11 @@ Shared:
 | [`agents/engineer.py`](agents/engineer.py) | Platform Engineer — the source lens: read-only workspace tools over the repo (read/list/search), answers grounded in real paths; owns the onboarding tour and the coding-agent skill routing. Wires the shared per-user profile/memory stores. |
 | [`workflows/deployment_check.py`](workflows/deployment_check.py) | Reference workflow — a deterministic `Step` that checks DB, auth, the OpenAI key, scheduler URL, MCP reachability, Slack config, component imports, registry names, schedule state, and poller liveness; imported into `app/main.py` and passed to `AgentOS(workflows=[...])`. |
 | [`workflows/run_evals.py`](workflows/run_evals.py) | Optional workflow — runs a tagged subset of the eval suite and returns a compact report. Its daily schedule ships disabled — enable it from the AgentOS UI. |
+| [`workflows/parallel_execution.py`](workflows/parallel_execution.py) | On-demand WHOS execution workflow — validates the handoff envelope, triggers the configured Hatchet runnable, fans a separate prompt out to 1–3 allowlisted LibreFang agents, and never auto-retries provider calls. Disabled by default; see [`docs/parallel-execution.md`](docs/parallel-execution.md). |
 | [`app/schedules.py`](app/schedules.py) | `register_schedules()` — cron registration, called from the lifespan (idempotent, fail-soft). |
 | [`db/session.py`](db/session.py) | `get_postgres_db()`, `create_knowledge()`. |
 | [`db/url.py`](db/url.py) | Builds the database URL from env. |
+| [`app/integrations/parallel_execution.py`](app/integrations/parallel_execution.py) | Gated Hatchet SDK and LibreFang REST clients; the WHOS worker retains canonical gate verification and the exactly-once fence. |
 | [`evals/cases.py`](evals/cases.py) | Eval cases (each is a `Case` with optional judge + reliability checks). |
 | [`evals/hooks.py`](evals/hooks.py) | Setup/teardown machinery behind the cases — snapshot-diff sweeps with their refusal guards. |
 | [`evals/__main__.py`](evals/__main__.py) | `python -m evals` — thin entrypoint over agno's eval suite runner (`agno.eval.cli`). |
@@ -224,6 +227,9 @@ Invoke a skill by name (`/extend-agent`) or just describe the task — Claude Co
 | `MCP_CONNECT_SECRET` | no | — | If set (≥16 chars, e.g. `openssl rand -base64 32`), `/mcp` becomes its own OAuth 2.1 authorization server (built-in tier) so claude.ai and ChatGPT (web) can connect; connecting asks for this secret on a consent page. Requires `AGENTOS_URL`. PAT and JWT bearers keep working alongside. `scripts/railway/up.sh` auto-generates it into your env file on deploy. |
 | `AGENTOS_MCP_SIGNING_KEY` | no | — | Optional high-entropy signing-key material (≥32 chars) for OAuth tokens. Unset, a strong key is generated and persisted in the database. Rotating it invalidates outstanding tokens. |
 | `ENABLE_DEPLOY_CHECK` | no | `True` | The reference deployment-check cron (`app/schedules.py`) runs daily by default. This env var owns the schedule's toggle and re-asserts it on every boot, both directions — so flip the cron here, not in the UI. The workflow stays runnable on demand regardless. |
+| `WHOS_PARALLEL_EXECUTION_ENABLED` | no | `false` | Explicit external-service activation switch. Must be `true` to dispatch; do not enable until Owner approves the potentially chargeable provider calls. |
+| `HATCHET_TOKEN` / `HATCHET_URL` / `HATCHET_RUNNABLE_NAME` | when enabled | — | Tenant-scoped token, gRPC control-plane HTTPS origin, and exact registered workflow/task name. `HATCHET_RUNNABLE_KIND` is `workflow` (default) or `standalone` for the current WHOS worker tasks. |
+| `LIBREFANG_URL` / `LIBREFANG_API_KEY` / `LIBREFANG_AGENT_IDS` | when enabled | — | LibreFang HTTPS API origin, Bearer key, and allowlist of 1–3 existing agent IDs. See [`docs/parallel-execution.md`](docs/parallel-execution.md); keep credentials only in Railway variables. |
 | `EVALS_TAG` | no | `smoke` | Eval tag run by the run-evals workflow. |
 | `EVALS_CASE_TIMEOUT_SECONDS` | no | `90` | Default per-case timeout for run-evals runs; applies only to cases that don't set their own `timeout_seconds`. |
 | `EVALS_SUITE_TIMEOUT_SECONDS` | no | derived | Whole-suite timeout for run-evals runs; per-case timeouts are the granular limit. Unset, it is derived from the cases the tag actually selects (their ceilings plus hook margin), so adding a case never silently outgrows the budget. Set it to override. |
