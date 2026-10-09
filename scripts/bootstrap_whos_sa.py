@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
-Idempotent AgentOS service account bootstrap for whos-pee-option-a-v2.
+Idempotent AgentOS service account bootstrap for WHOS PEE service accounts.
 
 Uses Agno's native PostgresDb.create_service_account and ServiceAccount model
 for consistent schema and behavior.
 
 Behavior:
-- If whos-pee-option-a-v2 is absent (and not revoked): create from WHOS_PEE_AGENTOS_TOKEN
+- If the selected account is absent (and not revoked): create from WHOS_PEE_AGENTOS_TOKEN
 - If active account exists with matching token hash, scopes, and not expired: idempotent success
-- If active account exists with different token hash, scopes, or expired: fail closed, no mutation
+- If active account exists with a different token hash or expired: fail closed
+- The exact owner-approved v3 account can transition once from its exact v2 scope set
+  to the bounded read scopes and its own workflow's run scope, using a compare-and-swap
+- All other scope mismatches fail closed
 - If no active account but revoked account exists: fail closed, no mutation
 - If any account exists with different state: never recreate, fail closed
 
 After successful creation/validation, prints:
-  WHOS_AGENTOS_SERVICE_ACCOUNT_READY name=whos-pee-option-a-v2 scopes=4
+  WHOS_AGENTOS_SERVICE_ACCOUNT_READY name=<account> scopes=<count> scope_list=<comma-separated scopes>
 
 Token must start with 'agno_pat_' prefix.
 
@@ -39,6 +42,7 @@ import os
 import re
 import sys
 import time
+from typing import Any
 from uuid import uuid4
 
 from agno.db.schemas.service_accounts import ServiceAccount
@@ -48,6 +52,84 @@ from db import get_postgres_db
 
 VALIDITY_SECONDS = 30 * 24 * 60 * 60
 EXPIRY_SLACK_SECONDS = 24 * 60 * 60
+V3_ACCOUNT_NAME = "whos-pee-option-a-v3"
+BASE_SCOPES = [
+    "config:read",
+    "sessions:read",
+    "agents:platform-engineer:read",
+    "agents:platform-engineer:run",
+]
+V3_SCOPES = [
+    *BASE_SCOPES,
+    "agents:read",
+    "teams:read",
+    "workflows:read",
+    "workflows:parallel-execution:run",
+]
+
+
+def scopes_for_account(sa_name: str) -> list[str]:
+    """Return the least-privilege profile for this immutable account version."""
+    return list(V3_SCOPES if sa_name == V3_ACCOUNT_NAME else BASE_SCOPES)
+
+
+def upgrade_v3_scopes_once(db: Any, active_sa: dict[str, Any], token_hash: str) -> str | None:
+    """CAS-grant only the owner-approved v3 account from the exact legacy set.
+
+    Agno deliberately treats service-account scopes as immutable through its public
+    update API. This narrowly scoped migration is the explicit exception authorized
+    for v3: match name, row id, token hash, active state and exact old scopes in one
+    SQL UPDATE, then verify the committed scopes by reading the row back. It never
+    changes the token, expiry, or any other account.
+    """
+    if active_sa.get("name") != V3_ACCOUNT_NAME:
+        return "scope migration is restricted to the approved v3 account"
+    account_id = active_sa.get("id")
+    if not isinstance(account_id, str) or not account_id:
+        return "account has no valid id for the guarded scope migration"
+    if active_sa.get("token_hash") != token_hash:
+        return "account token hash does not match the configured token"
+    if active_sa.get("revoked_at") is not None:
+        return "account is revoked"
+    if active_sa.get("scopes") != BASE_SCOPES:
+        return "account does not have the exact legacy scope set"
+
+    table = db._get_table(table_type="service_accounts")
+    if table is None:
+        return "service-account table is unavailable"
+    with db.Session() as session, session.begin():
+        result = session.execute(
+            table.update()
+            .where(
+                table.c.id == account_id,
+                table.c.name == V3_ACCOUNT_NAME,
+                table.c.token_hash == token_hash,
+                table.c.revoked_at.is_(None),
+                table.c.scopes == BASE_SCOPES,
+            )
+            .values(scopes=V3_SCOPES)
+        )
+
+    updated = db.get_service_account_by_name(V3_ACCOUNT_NAME, include_revoked=True)
+    if (
+        not updated
+        or updated.get("id") != account_id
+        or updated.get("name") != V3_ACCOUNT_NAME
+        or updated.get("token_hash") != token_hash
+        or updated.get("revoked_at") is not None
+        or updated.get("scopes") != V3_SCOPES
+    ):
+        # A concurrent identical migration is harmless; accept only if the
+        # authoritative read-back is already the exact intended state.
+        if getattr(result, "rowcount", 0) != 0:
+            return "scope migration read-back did not match the requested state"
+        return "scope migration compare-and-swap matched no row"
+    return None
+
+
+def print_ready(sa_name: str, sa_scopes: list[str]) -> None:
+    """Emit auditable permission names, never credential material."""
+    print(f"WHOS_AGENTOS_SERVICE_ACCOUNT_READY name={sa_name} scopes={len(sa_scopes)} scope_list={','.join(sa_scopes)}")
 
 
 def expiry_refusal(expires_at: object, now_epoch: int) -> str | None:
@@ -96,12 +178,7 @@ def main():
     if not re.fullmatch(r"whos-pee-option-a-v[1-9][0-9]*", sa_name):
         print("ERROR: WHOS_PEE_AGENTOS_SA_NAME must match whos-pee-option-a-v<N>", file=sys.stderr)
         sys.exit(1)
-    sa_scopes = [
-        "config:read",
-        "sessions:read",
-        "agents:platform-engineer:read",
-        "agents:platform-engineer:run",
-    ]
+    sa_scopes = scopes_for_account(sa_name)
     now_epoch = int(time.time())
     expires_at = now_epoch + VALIDITY_SECONDS
     created_by = "owner-approved-whos-activation"
@@ -131,11 +208,28 @@ def main():
                 )
                 sys.exit(1)
 
-            existing_scopes = active_sa.get("scopes") or []
-            # Fail-closed: existing_scopes must be a list with exactly 4 values matching sa_scopes
+            refusal = expiry_refusal(active_sa.get("expires_at"), now_epoch)
+            if refusal:
+                print(f"ERROR: Service account {sa_name} {refusal}. Not mutating.", file=sys.stderr)
+                sys.exit(1)
+
+            existing_scopes = active_sa.get("scopes")
+            if sa_name == V3_ACCOUNT_NAME and existing_scopes == BASE_SCOPES:
+                grant_refusal = upgrade_v3_scopes_once(db, active_sa, token_hash)
+                if grant_refusal:
+                    print(
+                        f"ERROR: Service account {sa_name} scope upgrade refused: {grant_refusal}. Not mutating.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                active_sa = db.get_service_account_by_name(sa_name, include_revoked=False)
+                existing_scopes = active_sa.get("scopes") if active_sa else None
+
+            # Fail-closed: require an exact, duplicate-free profile for this version.
             if (
                 not isinstance(existing_scopes, list)
-                or len(existing_scopes) != 4
+                or len(existing_scopes) != len(sa_scopes)
+                or len(set(existing_scopes)) != len(existing_scopes)
                 or set(existing_scopes) != set(sa_scopes)
             ):
                 print(
@@ -144,13 +238,8 @@ def main():
                 )
                 sys.exit(1)
 
-            refusal = expiry_refusal(active_sa.get("expires_at"), now_epoch)
-            if refusal:
-                print(f"ERROR: Service account {sa_name} {refusal}. Not mutating.", file=sys.stderr)
-                sys.exit(1)
-
             # Idempotent success
-            print(f"WHOS_AGENTOS_SERVICE_ACCOUNT_READY name={sa_name} scopes={len(sa_scopes)}")
+            print_ready(sa_name, sa_scopes)
             sys.exit(0)
 
         # No active account: check if revoked account exists
@@ -180,7 +269,7 @@ def main():
 
         db.create_service_account(new_sa.to_dict())
 
-        print(f"WHOS_AGENTOS_SERVICE_ACCOUNT_READY name={sa_name} scopes={len(sa_scopes)}")
+        print_ready(sa_name, sa_scopes)
         sys.exit(0)
 
     except Exception as e:
