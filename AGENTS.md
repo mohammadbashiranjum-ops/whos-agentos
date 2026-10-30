@@ -369,6 +369,10 @@ docker compose up -d --build
 railway logs --service agent-os
 ```
 
+## WHOS Owner working criteria (OD-0012 to OD-0014)
+
+Any agent working in this repository for WHOS follows the Owner's working criteria. They are not copied here, because a second copy is a second source of truth: the canonical text is the "Owner working criteria" section of `AGENTS.md` in `wise-hands-company/whos-backend`, the narrative is `docs/WHOS_OWNER_WORKING_CRITERIA_V1.md` there, and the Owner's own words are recorded as OD-0012, OD-0013 and OD-0014 in `config/whos_owner_directives_v1.json`. Load that section before acting. It grants no authority and lowers no rule; merge, deploy and the protected actions (payment, secrets and access, database migration, external send, destructive delete) keep their gates.
+
 ## Documentation Links
 
 - [Agno docs](https://docs.agno.com) — full framework reference.
