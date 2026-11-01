@@ -160,8 +160,10 @@ class EntrypointTokenScrubTests(unittest.TestCase):
 
     def test_chill_mode_scrub_runs_before_the_case(self):
         text = ENTRYPOINT.read_text()
-        self.assertLess(text.index("materialise_workspaces.py"), text.index('case "$1" in'))
-        self.assertLess(text.index("TOKEN_SCRUBBED"), text.index('case "$1" in'))
+        # The boot block moved to the shared scripts/workspace_boot.sh (sourced before the case).
+        boot = (SCRIPTS / "workspace_boot.sh").read_text()
+        self.assertLess(text.index('source "${SCRIPT_DIR}/workspace_boot.sh"'), text.index('case "$1" in'))
+        self.assertLess(boot.index("materialise_workspaces.py"), boot.index("TOKEN_SCRUBBED"))
 
 
 if __name__ == "__main__":

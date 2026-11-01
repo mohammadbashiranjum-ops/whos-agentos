@@ -763,10 +763,30 @@ def _digest_only(argv: list) -> int:
     return 0
 
 
+def _purge(root: Path) -> int:
+    """Remove everything under the workspaces root (used after a boot deadline killed a run mid-way)."""
+
+    removed = 0
+    if root.is_dir():
+        for child in list(root.iterdir()):
+            try:
+                if child.is_dir() and not child.is_symlink():
+                    _force_remove(child)
+                else:
+                    child.unlink()
+                removed += 1
+            except OSError:
+                print("WORKSPACE_REFUSED repo=* reason=purge_failed")
+    print(f"WORKSPACE_PURGED removed={removed}")
+    return 0
+
+
 def main(argv: list | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "--digest-only":
         return _digest_only(argv[1:])
+    if argv[:1] == ["--purge"]:
+        return _purge(Path(argv[1]) if len(argv) >= 2 else DEFAULT_ROOT)
     root = DEFAULT_ROOT
     if argv[:1] == ["--root"] and len(argv) >= 2:
         root = Path(argv[1])
