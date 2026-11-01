@@ -3,6 +3,10 @@ AgentOS Entrypoint
 ==================
 """
 
+# Workspace read-token self-check (WHOS PEE). Fail closed: a process that still carries a
+# WHOS_WORKSPACE_READ_TOKEN_* variable exits non-zero here, before anything else is built.
+# Keep this import first (isort: skip keeps it there).
+from app import token_guard_check as _token_guard_check  # noqa: F401  # isort: skip
 from contextlib import asynccontextmanager
 from os import getenv
 from pathlib import Path
@@ -15,6 +19,7 @@ from agno.utils.log import log_info
 from agents.builder import platform_builder
 from agents.engineer import platform_engineer
 from agents.manager import platform_manager
+from agents.pee_reader import pee_reader
 from app.health import install_queue_worker_health
 from app.knowledge import product_knowledge, shared_knowledge
 from app.registry import registry
@@ -124,7 +129,7 @@ agent_os = AgentOS(
     lifespan=lifespan,
     db=get_postgres_db(),
     knowledge=[shared_knowledge, product_knowledge],
-    agents=[platform_builder, platform_manager, platform_engineer],
+    agents=[platform_builder, platform_manager, platform_engineer, pee_reader],
     teams=[agno_team],
     workflows=[deployment_check, run_evals, parallel_execution],
     interfaces=interfaces,

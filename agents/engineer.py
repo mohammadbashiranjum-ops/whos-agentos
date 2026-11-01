@@ -8,9 +8,11 @@ from pathlib import Path
 from agno.agent import Agent
 from agno.context.mode import ContextMode
 from agno.context.workspace import WorkspaceContextProvider
+from agno.tools._local_file_utils import DEFAULT_EXCLUDE_PATTERNS
 
 from app.learning import shared_learning
 from app.offload import result_store
+from app.pee_denylist import provider_exclude_patterns
 from app.settings import default_model
 from db import get_postgres_db
 
@@ -24,6 +26,10 @@ codebase = WorkspaceContextProvider(
     name="Platform Source",
     root=REPO_ROOT,
     mode=ContextMode.tools,
+    # The library defaults plus `workspaces`: the pinned trees of other repositories belong to
+    # `pee-reader`, never to this agent (it carries learning, history and offload). A bare list
+    # would replace the defaults, so the two are concatenated.
+    exclude_patterns=[*DEFAULT_EXCLUDE_PATTERNS, *provider_exclude_patterns(for_agent="platform-engineer")],
     max_file_lines=50_000,
     max_file_length=4_000_000,
 )
