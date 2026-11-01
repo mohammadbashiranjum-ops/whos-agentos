@@ -22,6 +22,11 @@ manifest:
       - "How does tool offloading work?"
       - "How does the agno team work?"
 
+  pee-reader:
+    description: "Read-only reader for pinned copies of other repositories (WHOS PEE). Answers only from files a task names; remembers nothing."
+    quick_prompts:
+      - "Copy lines 1-20 of the file named in the task"
+
   # --- Teams ---
 
   agno:

@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "purpose": "Path deny-list for read-only pinned workspaces of other repositories (WHOS PEE). One definition: scripts/materialise_workspaces.py drops matching files at extraction, agents/pee_reader.py passes the same patterns to the provider as exclude_patterns (concatenated with DEFAULT_EXCLUDE_PATTERNS). Names only; no secret value lives here.",
+  "matching": "Each path segment is normalised (Unicode NFKC, casefold, control and format characters removed) and matched with fnmatch against the lower-case patterns below. Raw names with a backslash, a control or format character, or any character outside printable ASCII are dropped.",
+  "segment_patterns": [
+    ".*",
+    "*.env",
+    "env.*",
+    "*.pem",
+    "*.key",
+    "*.crt",
+    "*.cer",
+    "*.der",
+    "*.p8",
+    "*.p12",
+    "*.pfx",
+    "*.jks",
+    "*.keystore",
+    "*.gpg",
+    "*.ppk",
+    "*.kdbx",
+    "id_rsa*",
+    "id_ed25519*",
+    "id_ecdsa*",
+    "secrets*",
+    "credentials*",
+    "*.secret*",
+    "*.tfstate*",
+    "*.sqlite*",
+    "*.db",
+    "*.dump",
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    "vendor",
+    "__pycache__",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "poetry.lock",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.ico",
+    "*.webp",
+    "*.pdf",
+    "*.zip",
+    "*.gz",
+    "*.tgz",
+    "*.tar",
+    "*.woff",
+    "*.woff2",
+    "*.ttf",
+    "*.exe",
+    "*.dll",
+    "*.so",
+    "*.dylib"
+  ],
+  "conditional_patterns": [
+    {
+      "pattern": "*.sql",
+      "except_under": [
+        "prisma/migrations/"
+      ],
+      "note": "schema migrations stay readable; other SQL files (dumps) do not. Extraction only: the provider cannot express a path condition."
+    }
+  ],
+  "provider_only_patterns": [
+    "MANIFEST.txt"
+  ],
+  "provider_only_note": "MANIFEST.txt lists the paths of the pinned trees; the pee-reader agent does not need it.",
+  "limits": {
+    "max_file_bytes": 524288,
+    "credential_scan_chars": 20000
+  },
+  "engineer_extra_patterns": [
+    "workspaces"
+  ],
+  "engineer_extra_note": "platform-engineer must not read other repositories' pinned trees (design section 6.3); only pee-reader does."
+}
