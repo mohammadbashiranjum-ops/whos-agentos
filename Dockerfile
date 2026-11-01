@@ -15,7 +15,10 @@ COPY . .
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
-RUN chmod +x /app/scripts/entrypoint.sh
+RUN chmod +x /app/scripts/entrypoint.sh /app/scripts/shim/uvicorn
+# Railway runs a startCommand INSTEAD of the ENTRYPOINT. The shim directory is FIRST on PATH so a bare
+# `uvicorn ...` start still runs the workspace boot and the token scrub (scripts/shim/uvicorn).
+ENV PATH="/app/scripts/shim:${PATH}"
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]
 
 # ---------------------------------------------------------------------------

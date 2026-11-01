@@ -1,0 +1,39 @@
+#!/bin/bash
+# PATH shim for uvicorn (WHOS PEE phase 1, revision 3). The Dockerfile puts this directory FIRST on
+# PATH, so a bare `uvicorn app.main:app ...` (a service-level startCommand override, or a
+# railway.json one) runs the workspace boot and token scrub before the real server starts, even
+# though Railway bypasses the Dockerfile ENTRYPOINT. When scripts/entrypoint.sh ran first the boot
+# is already done (WHOS_WORKSPACE_BOOT_DONE=1) and only the idempotent scrub repeats.
+#
+# Recursion is refused three ways: a second entry (WHOS_UVICORN_SHIM_ACTIVE, set before the exec and
+# carrying no secret) fails loudly with exit 127; a PATH candidate is skipped when it is this file by
+# directory, by realpath or inode (symlink, hard link), or when its bytes equal this file (a copy).
+_shim_self="${BASH_SOURCE[0]}"
+_shim_dir="$(cd "$(dirname "${_shim_self}")" && pwd)"
+if [[ "${WHOS_UVICORN_SHIM_ACTIVE:-}" == "1" ]]; then
+    echo "UVICORN_SHIM_FAILED reason=recursion" >&2
+    exit 127
+fi
+_real=""
+_old_ifs="${IFS}"
+IFS=':'
+for _d in ${PATH}; do
+    [[ -n "${_d}" ]] || continue
+    [[ "$(cd "${_d}" 2>/dev/null && pwd)" == "${_shim_dir}" ]] && continue
+    _c="${_d}/uvicorn"
+    [[ -x "${_c}" && ! -d "${_c}" ]] || continue
+    [[ "${_c}" -ef "${_shim_self}" ]] && continue
+    [[ "$(realpath -- "${_c}" 2>/dev/null)" == "$(realpath -- "${_shim_self}" 2>/dev/null)" ]] && continue
+    cmp -s -- "${_c}" "${_shim_self}" && continue
+    _real="${_c}"
+    break
+done
+IFS="${_old_ifs}"
+if [[ -z "${_real}" ]]; then
+    echo "UVICORN_SHIM_FAILED reason=real_uvicorn_not_found" >&2
+    exit 127
+fi
+# shellcheck source=scripts/workspace_boot.sh
+source "${_shim_dir}/../workspace_boot.sh"
+export WHOS_UVICORN_SHIM_ACTIVE=1
+exec "${_envu[@]}" "${_real}" "$@"
