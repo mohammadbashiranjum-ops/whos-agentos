@@ -189,6 +189,15 @@ Run with `python -m evals --tag smoke`, `python -m evals --tag release`, or `pyt
 
 Two skills work this suite from opposite ends. To author coverage — especially for agents you build, which start with none — run [`/create-evals`](.agents/skills/create-evals/SKILL.md): it maps what an agent promises, mines real sessions from Postgres for scenarios, and writes audited cases into the marked user-cases section of `evals/cases.py`. To diagnose failures and fix in scope, run [`/eval-and-improve`](.agents/skills/eval-and-improve/SKILL.md).
 
+## Working Criteria V2 (OD-0015)
+
+The Owner ratified "Working Criteria V2" as `OD-0015` on 2026-11-02. This repo points at the canonical docs; it does not copy them. Read them in `wise-hands-company/whos-backend` (branch `claude/mission-rules-upgrade-20261102`, head `77dcfdbf`; the path stays the same once merged):
+
+- `docs/WHOS_OWNER_WORKING_CRITERIA_V2.md` — the Owner's criteria, in order.
+- `docs/WHOS_AGENT_WORKING_ORDER_V2.md` — the agent-facing short form.
+
+V2 lowers no rule and grants no authority; where it and this file differ, the stricter rule wins. Payment, secrets/access, migrations, external publish/send, legal commitment, and destructive delete stay exact-Owner-approval gated. A Maker never PASSes its own work: a separate session reviews the exact head.
+
 ## Reviewing the repo
 
 Run the `/review-and-improve` skill ([`.agents/skills/review-and-improve`](.agents/skills/review-and-improve/SKILL.md)). A recurring sweep that diffs docs against code: every agent registered, every env var documented, every path in a doc still exists, every script behaves as advertised. Auto-fixes mechanical drift; flags anything bigger. Best run before a public-facing release or after a refactor.
