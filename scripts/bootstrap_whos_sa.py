@@ -14,6 +14,8 @@ Behavior:
 - The exact owner-approved v4 account (the renewal that replaced v3 as the live account)
   can transition once from its exact four base scopes to those four plus
   agents:pee-reader:run, using the same compare-and-swap
+- The same v4 account can then transition once from those five scopes to six by adding
+  agents:pee-reader:read (the AgentOS middleware requires the per-agent read scope to poll a run)
 - All other scope mismatches fail closed
 - If no active account but revoked account exists: fail closed, no mutation
 - If any account exists with different state: never recreate, fail closed
@@ -76,17 +78,23 @@ V3_PEE_READER_SCOPES = [*V3_SCOPES, PEE_READER_SCOPE]
 # only the pee-reader run scope; it never receives the v3 read/workflow scopes.
 V4_ACCOUNT_NAME = "whos-pee-option-a-v4"
 V4_PEE_READER_SCOPES = [*BASE_SCOPES, PEE_READER_SCOPE]
+# Step 2 of v4: the AgentOS middleware maps GET /agents/* to agents:read and checks it against
+# the agent in the path, so polling a pee-reader run needs the per-agent read scope as well.
+# Exactly one added scope, nothing removed.
+PEE_READER_READ_SCOPE = "agents:pee-reader:read"
+V4_PEE_READER_READ_SCOPES = [*V4_PEE_READER_SCOPES, PEE_READER_READ_SCOPE]
 
 # The only (account, old scopes, new scopes) transitions the CAS may perform.
 APPROVED_TRANSITIONS: set[tuple[str, tuple[str, ...], tuple[str, ...]]] = {
     (V3_ACCOUNT_NAME, tuple(BASE_SCOPES), tuple(V3_SCOPES)),
     (V3_ACCOUNT_NAME, tuple(V3_SCOPES), tuple(V3_PEE_READER_SCOPES)),
     (V4_ACCOUNT_NAME, tuple(BASE_SCOPES), tuple(V4_PEE_READER_SCOPES)),
+    (V4_ACCOUNT_NAME, tuple(V4_PEE_READER_SCOPES), tuple(V4_PEE_READER_READ_SCOPES)),
 }
 
 _PROFILES = {
     V3_ACCOUNT_NAME: V3_PEE_READER_SCOPES,
-    V4_ACCOUNT_NAME: V4_PEE_READER_SCOPES,
+    V4_ACCOUNT_NAME: V4_PEE_READER_READ_SCOPES,
 }
 
 
@@ -169,6 +177,11 @@ def upgrade_pee_reader_scope_once(db: Any, active_sa: dict[str, Any], token_hash
 def upgrade_v4_pee_reader_scope_once(db: Any, active_sa: dict[str, Any], token_hash: str) -> str | None:
     """The live v4 account: the exact four base scopes -> the same four plus agents:pee-reader:run."""
     return _cas_scopes_once(db, active_sa, token_hash, BASE_SCOPES, V4_PEE_READER_SCOPES)
+
+
+def upgrade_v4_pee_reader_read_scope_once(db: Any, active_sa: dict[str, Any], token_hash: str) -> str | None:
+    """The live v4 account: its exact five scopes -> the same five plus agents:pee-reader:read."""
+    return _cas_scopes_once(db, active_sa, token_hash, V4_PEE_READER_SCOPES, V4_PEE_READER_READ_SCOPES)
 
 
 def print_ready(sa_name: str, sa_scopes: list[str]) -> None:
@@ -282,6 +295,17 @@ def main():
 
             if sa_name == V4_ACCOUNT_NAME and existing_scopes == BASE_SCOPES:
                 grant_refusal = upgrade_v4_pee_reader_scope_once(db, active_sa, token_hash)
+                if grant_refusal:
+                    print(
+                        f"ERROR: Service account {sa_name} scope upgrade refused: {grant_refusal}. Not mutating.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                active_sa = db.get_service_account_by_name(sa_name, include_revoked=False)
+                existing_scopes = active_sa.get("scopes") if active_sa else None
+
+            if sa_name == V4_ACCOUNT_NAME and existing_scopes == V4_PEE_READER_SCOPES:
+                grant_refusal = upgrade_v4_pee_reader_read_scope_once(db, active_sa, token_hash)
                 if grant_refusal:
                     print(
                         f"ERROR: Service account {sa_name} scope upgrade refused: {grant_refusal}. Not mutating.",
