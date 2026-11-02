@@ -11,6 +11,9 @@ Behavior:
 - If active account exists with a different token hash or expired: fail closed
 - The exact owner-approved v3 account can transition once from its exact v2 scope set
   to the bounded read scopes and its own workflow's run scope, using a compare-and-swap
+- The exact owner-approved v4 account (the renewal that replaced v3 as the live account)
+  can transition once from its exact four base scopes to those four plus
+  agents:pee-reader:run, using the same compare-and-swap
 - All other scope mismatches fail closed
 - If no active account but revoked account exists: fail closed, no mutation
 - If any account exists with different state: never recreate, fail closed
@@ -69,11 +72,27 @@ V3_SCOPES = [
 PEE_READER_SCOPE = "agents:pee-reader:run"
 # Version step 2 of the v3 account: exactly one added scope, nothing removed.
 V3_PEE_READER_SCOPES = [*V3_SCOPES, PEE_READER_SCOPE]
+# The live account is the v4 renewal (four base scopes). Its one approved step adds
+# only the pee-reader run scope; it never receives the v3 read/workflow scopes.
+V4_ACCOUNT_NAME = "whos-pee-option-a-v4"
+V4_PEE_READER_SCOPES = [*BASE_SCOPES, PEE_READER_SCOPE]
+
+# The only (account, old scopes, new scopes) transitions the CAS may perform.
+APPROVED_TRANSITIONS: set[tuple[str, tuple[str, ...], tuple[str, ...]]] = {
+    (V3_ACCOUNT_NAME, tuple(BASE_SCOPES), tuple(V3_SCOPES)),
+    (V3_ACCOUNT_NAME, tuple(V3_SCOPES), tuple(V3_PEE_READER_SCOPES)),
+    (V4_ACCOUNT_NAME, tuple(BASE_SCOPES), tuple(V4_PEE_READER_SCOPES)),
+}
+
+_PROFILES = {
+    V3_ACCOUNT_NAME: V3_PEE_READER_SCOPES,
+    V4_ACCOUNT_NAME: V4_PEE_READER_SCOPES,
+}
 
 
 def scopes_for_account(sa_name: str) -> list[str]:
     """Return the least-privilege profile for this immutable account version."""
-    return list(V3_PEE_READER_SCOPES if sa_name == V3_ACCOUNT_NAME else BASE_SCOPES)
+    return list(_PROFILES.get(sa_name, BASE_SCOPES))
 
 
 def _cas_scopes_once(
@@ -83,16 +102,17 @@ def _cas_scopes_once(
     old_scopes: list[str],
     new_scopes: list[str],
 ) -> str | None:
-    """CAS-grant the owner-approved v3 account from one exact scope set to the next.
+    """CAS-grant an owner-approved account from one exact scope set to the next.
 
     Agno deliberately treats service-account scopes as immutable through its public
     update API. This narrowly scoped migration is the explicit exception authorized
-    for v3: match name, row id, token hash, active state and exact old scopes in one
+    for v3 and v4: match name, row id, token hash, active state and exact old scopes in one
     SQL UPDATE, then verify the committed scopes by reading the row back. It never
     changes the token, expiry, or any other account.
     """
-    if active_sa.get("name") != V3_ACCOUNT_NAME:
-        return "scope migration is restricted to the approved v3 account"
+    account_name = active_sa.get("name")
+    if (account_name, tuple(old_scopes), tuple(new_scopes)) not in APPROVED_TRANSITIONS:
+        return "scope migration is restricted to the approved account transitions"
     account_id = active_sa.get("id")
     if not isinstance(account_id, str) or not account_id:
         return "account has no valid id for the guarded scope migration"
@@ -111,7 +131,7 @@ def _cas_scopes_once(
             table.update()
             .where(
                 table.c.id == account_id,
-                table.c.name == V3_ACCOUNT_NAME,
+                table.c.name == account_name,
                 table.c.token_hash == token_hash,
                 table.c.revoked_at.is_(None),
                 table.c.scopes == old_scopes,
@@ -119,11 +139,11 @@ def _cas_scopes_once(
             .values(scopes=new_scopes)
         )
 
-    updated = db.get_service_account_by_name(V3_ACCOUNT_NAME, include_revoked=True)
+    updated = db.get_service_account_by_name(account_name, include_revoked=True)
     if (
         not updated
         or updated.get("id") != account_id
-        or updated.get("name") != V3_ACCOUNT_NAME
+        or updated.get("name") != account_name
         or updated.get("token_hash") != token_hash
         or updated.get("revoked_at") is not None
         or updated.get("scopes") != new_scopes
@@ -144,6 +164,11 @@ def upgrade_v3_scopes_once(db: Any, active_sa: dict[str, Any], token_hash: str) 
 def upgrade_pee_reader_scope_once(db: Any, active_sa: dict[str, Any], token_hash: str) -> str | None:
     """Step 2: the exact eight v3 scopes -> the same eight plus agents:pee-reader:run."""
     return _cas_scopes_once(db, active_sa, token_hash, V3_SCOPES, V3_PEE_READER_SCOPES)
+
+
+def upgrade_v4_pee_reader_scope_once(db: Any, active_sa: dict[str, Any], token_hash: str) -> str | None:
+    """The live v4 account: the exact four base scopes -> the same four plus agents:pee-reader:run."""
+    return _cas_scopes_once(db, active_sa, token_hash, BASE_SCOPES, V4_PEE_READER_SCOPES)
 
 
 def print_ready(sa_name: str, sa_scopes: list[str]) -> None:
@@ -246,6 +271,17 @@ def main():
 
             if sa_name == V3_ACCOUNT_NAME and existing_scopes == V3_SCOPES:
                 grant_refusal = upgrade_pee_reader_scope_once(db, active_sa, token_hash)
+                if grant_refusal:
+                    print(
+                        f"ERROR: Service account {sa_name} scope upgrade refused: {grant_refusal}. Not mutating.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                active_sa = db.get_service_account_by_name(sa_name, include_revoked=False)
+                existing_scopes = active_sa.get("scopes") if active_sa else None
+
+            if sa_name == V4_ACCOUNT_NAME and existing_scopes == BASE_SCOPES:
+                grant_refusal = upgrade_v4_pee_reader_scope_once(db, active_sa, token_hash)
                 if grant_refusal:
                     print(
                         f"ERROR: Service account {sa_name} scope upgrade refused: {grant_refusal}. Not mutating.",
