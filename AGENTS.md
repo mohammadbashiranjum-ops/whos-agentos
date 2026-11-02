@@ -191,7 +191,7 @@ Two skills work this suite from opposite ends. To author coverage — especially
 
 ## Working Criteria V2 (OD-0015)
 
-The Owner ratified "Working Criteria V2" as `OD-0015` on 2026-11-02. This repo points at the canonical docs; it does not copy them. Read them in `wise-hands-company/whos-backend` (branch `claude/mission-rules-upgrade-20261102`, head `77dcfdbf`; the path stays the same once merged):
+The Owner ratified "Working Criteria V2" as `OD-0015` on 2026-11-02. This repo points at the canonical docs; it does not copy them. Read them in `wise-hands-company/whos-backend` on `main` (merged at `f5870b5c`):
 
 - `docs/WHOS_OWNER_WORKING_CRITERIA_V2.md` — the Owner's criteria, in order.
 - `docs/WHOS_AGENT_WORKING_ORDER_V2.md` — the agent-facing short form.

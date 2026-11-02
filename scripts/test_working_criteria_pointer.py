@@ -26,6 +26,8 @@ class WorkingCriteriaPointerTest(unittest.TestCase):
         self.assertIn("docs/WHOS_OWNER_WORKING_CRITERIA_V2.md", text)
         self.assertIn("docs/WHOS_AGENT_WORKING_ORDER_V2.md", text)
         self.assertIn("never PASSes its own work", text)
+        self.assertIn("wise-hands-company/whos-backend` on `main`", text)
+        self.assertNotIn("claude/mission-rules-upgrade-20261102", text)
         for gate in GATES:
             self.assertIn(gate, text)
 
