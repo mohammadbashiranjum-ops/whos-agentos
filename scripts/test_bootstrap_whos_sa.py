@@ -42,7 +42,9 @@ ADDED_SCOPES = [
 V3_SCOPES = [*BASE_SCOPES, *ADDED_SCOPES]
 PEE_READER_SCOPE = "agents:pee-reader:run"
 FINAL_SCOPES = [*V3_SCOPES, PEE_READER_SCOPE]
-V4_FINAL_SCOPES = [*BASE_SCOPES, PEE_READER_SCOPE]
+V4_FIVE_SCOPES = [*BASE_SCOPES, PEE_READER_SCOPE]
+PEE_READER_READ_SCOPE = "agents:pee-reader:read"
+V4_FINAL_SCOPES = [*V4_FIVE_SCOPES, PEE_READER_READ_SCOPE]
 DAY = 24 * 60 * 60
 
 
@@ -487,10 +489,10 @@ class V3ScopeGrant(unittest.TestCase):
 
 
 class V4PeeReaderGrant(unittest.TestCase):
-    """The live v4 account gains exactly agents:pee-reader:run from its exact four base scopes."""
+    """The live v4 account holds five scopes and gains exactly agents:pee-reader:read."""
 
-    def test_v4_with_four_base_scopes_gains_exactly_the_pee_reader_scope(self) -> None:
-        row = active_row(int(time.time()) + 20 * DAY, name=V4_NAME, scopes=BASE_SCOPES)
+    def test_v4_with_five_scopes_gains_exactly_the_pee_reader_read_scope(self) -> None:
+        row = active_row(int(time.time()) + 20 * DAY, name=V4_NAME, scopes=V4_FIVE_SCOPES)
         v3 = active_row(int(time.time()) + 20 * DAY, name=V3_NAME, scopes=V3_SCOPES, token="agno_pat_" + "y" * 64)
         unrelated = active_row(
             int(time.time()) + 25 * DAY, name="unrelated-service-account", token="agno_pat_" + "z" * 64
@@ -499,23 +501,33 @@ class V4PeeReaderGrant(unittest.TestCase):
         code, out, db = run_bootstrap([row, v3, unrelated], account_name=V4_NAME)
         self.assertEqual(code, 0, out)
         self.assertEqual(row["scopes"], V4_FINAL_SCOPES)
-        self.assertEqual(set(row["scopes"]) - set(BASE_SCOPES), {PEE_READER_SCOPE})
-        self.assertTrue(set(BASE_SCOPES) <= set(row["scopes"]))  # nothing removed
+        self.assertEqual(set(row["scopes"]) - set(V4_FIVE_SCOPES), {PEE_READER_READ_SCOPE})
+        self.assertTrue(set(V4_FIVE_SCOPES) <= set(row["scopes"]))  # nothing removed
         for key in ("id", "name", "token_hash", "expires_at", "revoked_at"):
             self.assertEqual(row[key], before[key], key)
         self.assertEqual(v3, v3_before)
         self.assertEqual(unrelated, unrelated_before)
         self.assertEqual(db.scope_updates, 1)
         self.assertEqual(db.created, [])
-        self.assertIn(f"name={V4_NAME} scopes=5", out)
+        self.assertIn(f"name={V4_NAME} scopes=6", out)
         self.assertIn("scope_list=" + ",".join(V4_FINAL_SCOPES), out)
+        self.assertTrue(out.strip().endswith("agents:pee-reader:run,agents:pee-reader:read"), out)
         self.assertNotIn(TOKEN, out)
         self.assertNotIn(before["token_hash"], out)
 
-    def test_v4_never_receives_the_v3_read_or_workflow_scopes(self) -> None:
+    def test_v4_with_four_scopes_walks_both_guarded_steps_in_order(self) -> None:
         row = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=BASE_SCOPES)
+        code, out, db = run_bootstrap([row], account_name=V4_NAME)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(row["scopes"], V4_FINAL_SCOPES)
+        self.assertEqual(db.scope_updates, 2)
+
+    def test_v4_never_receives_the_v3_read_or_workflow_scopes(self) -> None:
+        row = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=V4_FIVE_SCOPES)
         run_bootstrap([row], account_name=V4_NAME)
         for scope in ADDED_SCOPES:
+            self.assertNotIn(scope, row["scopes"])
+        for scope in ("agents:read", "agents:run", "agents:*:read", "agents:*:run", "sessions:write"):
             self.assertNotIn(scope, row["scopes"])
 
     def test_already_granted_v4_is_idempotent(self) -> None:
@@ -526,7 +538,7 @@ class V4PeeReaderGrant(unittest.TestCase):
         self.assertEqual(db.scope_updates, 0)
 
     def test_second_run_after_the_grant_changes_nothing(self) -> None:
-        row = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=BASE_SCOPES)
+        row = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=V4_FIVE_SCOPES)
         code, out, db = run_bootstrap([row], account_name=V4_NAME)
         self.assertEqual(code, 0, out)
         code, out, db2 = run_bootstrap(db.rows, account_name=V4_NAME)
@@ -534,36 +546,40 @@ class V4PeeReaderGrant(unittest.TestCase):
         self.assertEqual(db2.scope_updates, 0)
 
     def test_cas_miss_refuses_without_mutation(self) -> None:
-        row = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=BASE_SCOPES)
+        row = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=V4_FIVE_SCOPES)
         code, out, db = run_bootstrap([row], account_name=V4_NAME, fail_update=True)
         self.assertEqual(code, 1, out)
         self.assertIn("compare-and-swap matched no row", out)
-        self.assertEqual(row["scopes"], BASE_SCOPES)
+        self.assertEqual(row["scopes"], V4_FIVE_SCOPES)
 
     def test_wrong_token_hash_revoked_or_bad_expiry_refuse(self) -> None:
-        row = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=BASE_SCOPES)
+        row = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=V4_FIVE_SCOPES)
         code, out, db = run_bootstrap([row], token="agno_pat_" + "b" * 64, account_name=V4_NAME)
         self.assertEqual(code, 1, out)
-        self.assertEqual(row["scopes"], BASE_SCOPES)
+        self.assertEqual(row["scopes"], V4_FIVE_SCOPES)
         self.assertEqual(db.scope_updates, 0)
-        revoked = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=BASE_SCOPES, revoked_at=int(time.time()))
+        revoked = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=V4_FIVE_SCOPES, revoked_at=int(time.time()))
         code, out, db = run_bootstrap([revoked], account_name=V4_NAME)
         self.assertEqual(code, 1, out)
-        self.assertEqual(revoked["scopes"], BASE_SCOPES)
+        self.assertEqual(revoked["scopes"], V4_FIVE_SCOPES)
         self.assertEqual(db.created, [])
         self.assertEqual(db.scope_updates, 0)
-        nullexp = active_row(None, name=V4_NAME, scopes=BASE_SCOPES)
+        nullexp = active_row(None, name=V4_NAME, scopes=V4_FIVE_SCOPES)
         code, out, db = run_bootstrap([nullexp], account_name=V4_NAME)
         self.assertEqual(code, 1, out)
         self.assertEqual(db.scope_updates, 0)
 
     def test_unexpected_or_duplicate_scopes_refuse(self) -> None:
         for scopes in (
+            V4_FIVE_SCOPES + ["agents:write"],
+            V4_FIVE_SCOPES + ["agents:read"],
+            BASE_SCOPES + [PEE_READER_READ_SCOPE],  # read without run is not an approved state
             BASE_SCOPES + ["agents:write"],
             BASE_SCOPES[:-1],
-            BASE_SCOPES + ["config:read"],
+            V4_FINAL_SCOPES + [PEE_READER_READ_SCOPE],
+            V4_FINAL_SCOPES + ["agents:write"],
+            V4_FIVE_SCOPES + [PEE_READER_SCOPE],
             V3_SCOPES,
-            V4_FINAL_SCOPES + [PEE_READER_SCOPE],
         ):
             with self.subTest(scopes=scopes):
                 row = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=scopes)
@@ -581,13 +597,13 @@ class V4PeeReaderGrant(unittest.TestCase):
             seen.append(update)
             return update
 
-        row = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=BASE_SCOPES)
+        row = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=V4_FIVE_SCOPES)
         with mock.patch.object(FakeTable, "update", spy):
             code, out, _ = run_bootstrap([row], account_name=V4_NAME)
         self.assertEqual(code, 0, out)
         self.assertEqual(len(seen), 1)
         predicates = seen[0].predicates
-        self.assertIn(("eq", "scopes", BASE_SCOPES), predicates)
+        self.assertIn(("eq", "scopes", V4_FIVE_SCOPES), predicates)
         self.assertIn(("eq", "name", V4_NAME), predicates)
         self.assertIn(("eq", "id", row["id"]), predicates)
         self.assertIn(("eq", "token_hash", _hash(TOKEN)), predicates)
@@ -596,15 +612,40 @@ class V4PeeReaderGrant(unittest.TestCase):
 
     def test_cas_refuses_any_transition_outside_the_approved_table(self) -> None:
         module = load_script(FakeDb([]))
-        row = {"id": "x", "name": V4_NAME, "token_hash": _hash(TOKEN), "revoked_at": None, "scopes": BASE_SCOPES}
-        # v4 may not be walked to the v3 eight, and v5 has no approved transition at all.
-        self.assertIn("restricted", module._cas_scopes_once(FakeDb([row]), row, _hash(TOKEN), BASE_SCOPES, V3_SCOPES))
-        other = dict(row, name="whos-pee-option-a-v5")
+        row = {"id": "x", "name": V4_NAME, "token_hash": _hash(TOKEN), "revoked_at": None, "scopes": V4_FIVE_SCOPES}
+        cas = module._cas_scopes_once
+        # v4 may not be walked to the v3 eight, skip a step, or take any other sixth scope.
+        self.assertIn("restricted", cas(FakeDb([row]), row, _hash(TOKEN), V4_FIVE_SCOPES, V3_SCOPES))
+        self.assertIn("restricted", cas(FakeDb([row]), row, _hash(TOKEN), BASE_SCOPES, V4_FINAL_SCOPES))
         self.assertIn(
-            "restricted", module._cas_scopes_once(FakeDb([other]), other, _hash(TOKEN), BASE_SCOPES, V4_FINAL_SCOPES)
+            "restricted", cas(FakeDb([row]), row, _hash(TOKEN), V4_FIVE_SCOPES, [*V4_FIVE_SCOPES, "agents:read"])
         )
+        self.assertIn(
+            "restricted", cas(FakeDb([row]), row, _hash(TOKEN), V4_FIVE_SCOPES, [*V4_FIVE_SCOPES, "agents:*:read"])
+        )
+        # v5 and v3 have no approved v4 transition.
+        for name in ("whos-pee-option-a-v5", V3_NAME):
+            other = dict(row, name=name)
+            self.assertIn(
+                "restricted", cas(FakeDb([other]), other, _hash(TOKEN), V4_FIVE_SCOPES, V4_FINAL_SCOPES), name
+            )
 
-    def test_v2_and_v5_never_get_the_pee_reader_scope(self) -> None:
+    def test_fresh_v4_is_created_with_the_six_scope_profile(self) -> None:
+        code, out, db = run_bootstrap([], account_name=V4_NAME)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(db.created[0]["scopes"], V4_FINAL_SCOPES)
+        self.assertEqual(db.scope_updates, 0)
+        self.assertIn(f"name={V4_NAME} scopes=6", out)
+
+    def test_another_account_holding_the_five_scopes_is_not_migrated(self) -> None:
+        row = active_row(int(time.time()) + DAY, name="whos-pee-option-a-v5", scopes=V4_FIVE_SCOPES)
+        code, out, db = run_bootstrap([row], account_name="whos-pee-option-a-v5")
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("upgrade refused", out)  # the migration step never ran for it
+        self.assertEqual(row["scopes"], V4_FIVE_SCOPES)
+        self.assertEqual(db.scope_updates, 0)
+
+    def test_v2_and_v5_never_get_the_pee_reader_scopes(self) -> None:
         for name in ("whos-pee-option-a-v2", "whos-pee-option-a-v5"):
             row = active_row(int(time.time()) + DAY, name=name, scopes=BASE_SCOPES)
             code, out, db = run_bootstrap([row], account_name=name)
@@ -614,7 +655,7 @@ class V4PeeReaderGrant(unittest.TestCase):
 
     def test_the_v3_migration_is_inert_when_the_selected_account_is_v4(self) -> None:
         v3 = active_row(int(time.time()) + DAY, name=V3_NAME, scopes=V3_SCOPES, token="agno_pat_" + "y" * 64)
-        v4 = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=BASE_SCOPES)
+        v4 = active_row(int(time.time()) + DAY, name=V4_NAME, scopes=V4_FIVE_SCOPES)
         before = dict(v3)
         code, out, db = run_bootstrap([v3, v4], account_name=V4_NAME)
         self.assertEqual(code, 0, out)
