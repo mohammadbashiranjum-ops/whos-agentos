@@ -39,6 +39,8 @@ ADDED_SCOPES = [
     "workflows:parallel-execution:run",
 ]
 V3_SCOPES = [*BASE_SCOPES, *ADDED_SCOPES]
+PEE_READER_SCOPE = "agents:pee-reader:run"
+FINAL_SCOPES = [*V3_SCOPES, PEE_READER_SCOPE]
 DAY = 24 * 60 * 60
 
 
@@ -288,34 +290,135 @@ class V3ScopeGrant(unittest.TestCase):
         original_expiry = row["expires_at"]
         code, out, db = run_bootstrap([row, unrelated], account_name=V3_NAME)
         self.assertEqual(code, 0, out)
-        self.assertEqual(row["scopes"], V3_SCOPES)
+        self.assertEqual(row["scopes"], FINAL_SCOPES)
         self.assertEqual(row["id"], original_id)
         self.assertEqual(row["token_hash"], original_hash)
         self.assertEqual(row["expires_at"], original_expiry)
         self.assertIsNone(row["revoked_at"])
         self.assertEqual(unrelated, unrelated_before)
         self.assertEqual(db.created, [])
-        self.assertEqual(db.scope_updates, 1)
-        self.assertIn(f"name={V3_NAME} scopes=8", out)
-        self.assertIn("scope_list=" + ",".join(V3_SCOPES), out)
+        self.assertEqual(db.scope_updates, 2)  # legacy -> v3, then v3 -> v3 + pee-reader
+        self.assertIn(f"name={V3_NAME} scopes=9", out)
+        self.assertIn("scope_list=" + ",".join(FINAL_SCOPES), out)
         self.assertNotIn(TOKEN, out)
         self.assertNotIn(original_hash, out)
 
-    def test_already_granted_v3_is_idempotent(self) -> None:
+    def test_v3_with_eight_scopes_gains_exactly_the_pee_reader_scope(self) -> None:
         row = active_row(int(time.time()) + 20 * DAY, name=V3_NAME, scopes=V3_SCOPES)
+        unrelated = active_row(
+            int(time.time()) + 25 * DAY,
+            name="unrelated-service-account",
+            token="agno_pat_" + "z" * 64,
+        )
+        unrelated_before = dict(unrelated)
+        before = dict(row)
+        code, out, db = run_bootstrap([row, unrelated], account_name=V3_NAME)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(row["scopes"], FINAL_SCOPES)
+        self.assertEqual(set(row["scopes"]) - set(V3_SCOPES), {PEE_READER_SCOPE})
+        self.assertTrue(set(V3_SCOPES) <= set(row["scopes"]))  # nothing removed
+        for key in ("id", "name", "token_hash", "expires_at", "revoked_at"):
+            self.assertEqual(row[key], before[key], key)
+        self.assertEqual(unrelated, unrelated_before)
+        self.assertEqual(db.scope_updates, 1)
+        self.assertEqual(db.created, [])
+        self.assertIn(f"name={V3_NAME} scopes=9", out)
+        self.assertNotIn(TOKEN, out)
+        self.assertNotIn(before["token_hash"], out)
+
+    def test_already_granted_v3_is_idempotent(self) -> None:
+        row = active_row(int(time.time()) + 20 * DAY, name=V3_NAME, scopes=FINAL_SCOPES)
         code, out, db = run_bootstrap([row], account_name=V3_NAME)
         self.assertEqual(code, 0, out)
-        self.assertEqual(row["scopes"], V3_SCOPES)
+        self.assertEqual(row["scopes"], FINAL_SCOPES)
         self.assertEqual(db.scope_updates, 0)
         self.assertEqual(db.created, [])
 
-    def test_new_v3_is_created_with_only_its_eight_scopes(self) -> None:
+    def test_second_run_after_the_pee_reader_grant_changes_nothing(self) -> None:
+        row = active_row(int(time.time()) + 20 * DAY, name=V3_NAME, scopes=V3_SCOPES)
+        code, out, db = run_bootstrap([row], account_name=V3_NAME)
+        self.assertEqual(code, 0, out)
+        code, out, db2 = run_bootstrap(db.rows, account_name=V3_NAME)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(db2.scope_updates, 0)
+        self.assertEqual(row["scopes"], FINAL_SCOPES)
+
+    def test_new_v3_is_created_with_its_nine_scopes(self) -> None:
         code, out, db = run_bootstrap([], account_name=V3_NAME)
         self.assertEqual(code, 0, out)
         self.assertEqual(len(db.created), 1)
         self.assertEqual(db.created[0]["name"], V3_NAME)
-        self.assertEqual(db.created[0]["scopes"], V3_SCOPES)
-        self.assertIn("scope_list=" + ",".join(V3_SCOPES), out)
+        self.assertEqual(db.created[0]["scopes"], FINAL_SCOPES)
+        self.assertIn("scope_list=" + ",".join(FINAL_SCOPES), out)
+
+    def test_pee_reader_step_cas_miss_refuses_without_mutation(self) -> None:
+        row = active_row(int(time.time()) + DAY, name=V3_NAME, scopes=V3_SCOPES)
+        code, out, db = run_bootstrap([row], account_name=V3_NAME, fail_update=True)
+        self.assertEqual(code, 1, out)
+        self.assertIn("compare-and-swap matched no row", out)
+        self.assertEqual(row["scopes"], V3_SCOPES)
+        self.assertEqual(db.scope_updates, 0)
+
+    def test_pee_reader_step_wrong_token_hash_refuses_without_grant(self) -> None:
+        row = active_row(int(time.time()) + DAY, name=V3_NAME, scopes=V3_SCOPES)
+        code, out, db = run_bootstrap([row], token="agno_pat_" + "b" * 64, account_name=V3_NAME)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(row["scopes"], V3_SCOPES)
+        self.assertEqual(db.scope_updates, 0)
+
+    def test_pee_reader_step_revoked_or_unexpected_scopes_refuse(self) -> None:
+        revoked = active_row(int(time.time()) + DAY, name=V3_NAME, scopes=V3_SCOPES, revoked_at=int(time.time()))
+        code, out, db = run_bootstrap([revoked], account_name=V3_NAME)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(revoked["scopes"], V3_SCOPES)
+        self.assertEqual(db.scope_updates, 0)
+        for scopes in (V3_SCOPES + ["agents:write"], V3_SCOPES[:-1], V3_SCOPES + [PEE_READER_SCOPE, PEE_READER_SCOPE]):
+            with self.subTest(scopes=scopes):
+                row = active_row(int(time.time()) + DAY, name=V3_NAME, scopes=scopes)
+                code, out, db = run_bootstrap([row], account_name=V3_NAME)
+                self.assertEqual(code, 1, out)
+                self.assertEqual(row["scopes"], scopes)
+                self.assertEqual(db.scope_updates, 0)
+
+    def test_v2_account_never_gets_the_pee_reader_scope(self) -> None:
+        row = active_row(int(time.time()) + DAY)
+        code, out, db = run_bootstrap([row])
+        self.assertEqual(code, 0, out)
+        self.assertEqual(row["scopes"], BASE_SCOPES)
+        self.assertNotIn(PEE_READER_SCOPE, out)
+        row = active_row(int(time.time()) + DAY, scopes=FINAL_SCOPES)
+        code, out, db = run_bootstrap([row])
+        self.assertEqual(code, 1, out)
+        self.assertIn("different scopes", out)
+        self.assertEqual(db.scope_updates, 0)
+
+    def test_pee_reader_update_is_guarded_by_the_exact_old_scopes(self) -> None:
+        seen: list[FakeUpdate] = []
+        original = FakeTable.update
+
+        def spy(table: FakeTable) -> FakeUpdate:
+            update = original(table)
+            seen.append(update)
+            return update
+
+        row = active_row(int(time.time()) + DAY, name=V3_NAME, scopes=V3_SCOPES)
+        with mock.patch.object(FakeTable, "update", spy):
+            code, out, _ = run_bootstrap([row], account_name=V3_NAME)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(seen), 1)
+        predicates = seen[0].predicates
+        self.assertIn(("eq", "scopes", V3_SCOPES), predicates)
+        self.assertIn(("eq", "name", V3_NAME), predicates)
+        self.assertIn(("eq", "token_hash", _hash(TOKEN)), predicates)
+        self.assertIn(("is", "revoked_at", None), predicates)
+        self.assertEqual(seen[0].values_to_set, {"scopes": FINAL_SCOPES})
+
+    def test_no_other_scope_is_added_by_the_profile(self) -> None:
+        module = load_script(FakeDb([]))
+        self.assertEqual(module.V3_PEE_READER_SCOPES, FINAL_SCOPES)
+        self.assertEqual(module.scopes_for_account(V3_NAME), FINAL_SCOPES)
+        self.assertEqual(module.scopes_for_account("whos-pee-option-a-v4"), BASE_SCOPES)
+        self.assertEqual(len(set(FINAL_SCOPES)), len(FINAL_SCOPES))
 
     def test_wrong_token_hash_refuses_without_grant(self) -> None:
         row = active_row(int(time.time()) + DAY, name=V3_NAME)

@@ -66,15 +66,24 @@ V3_SCOPES = [
     "workflows:read",
     "workflows:parallel-execution:run",
 ]
+PEE_READER_SCOPE = "agents:pee-reader:run"
+# Version step 2 of the v3 account: exactly one added scope, nothing removed.
+V3_PEE_READER_SCOPES = [*V3_SCOPES, PEE_READER_SCOPE]
 
 
 def scopes_for_account(sa_name: str) -> list[str]:
     """Return the least-privilege profile for this immutable account version."""
-    return list(V3_SCOPES if sa_name == V3_ACCOUNT_NAME else BASE_SCOPES)
+    return list(V3_PEE_READER_SCOPES if sa_name == V3_ACCOUNT_NAME else BASE_SCOPES)
 
 
-def upgrade_v3_scopes_once(db: Any, active_sa: dict[str, Any], token_hash: str) -> str | None:
-    """CAS-grant only the owner-approved v3 account from the exact legacy set.
+def _cas_scopes_once(
+    db: Any,
+    active_sa: dict[str, Any],
+    token_hash: str,
+    old_scopes: list[str],
+    new_scopes: list[str],
+) -> str | None:
+    """CAS-grant the owner-approved v3 account from one exact scope set to the next.
 
     Agno deliberately treats service-account scopes as immutable through its public
     update API. This narrowly scoped migration is the explicit exception authorized
@@ -91,7 +100,7 @@ def upgrade_v3_scopes_once(db: Any, active_sa: dict[str, Any], token_hash: str) 
         return "account token hash does not match the configured token"
     if active_sa.get("revoked_at") is not None:
         return "account is revoked"
-    if active_sa.get("scopes") != BASE_SCOPES:
+    if active_sa.get("scopes") != old_scopes:
         return "account does not have the exact legacy scope set"
 
     table = db._get_table(table_type="service_accounts")
@@ -105,9 +114,9 @@ def upgrade_v3_scopes_once(db: Any, active_sa: dict[str, Any], token_hash: str) 
                 table.c.name == V3_ACCOUNT_NAME,
                 table.c.token_hash == token_hash,
                 table.c.revoked_at.is_(None),
-                table.c.scopes == BASE_SCOPES,
+                table.c.scopes == old_scopes,
             )
-            .values(scopes=V3_SCOPES)
+            .values(scopes=new_scopes)
         )
 
     updated = db.get_service_account_by_name(V3_ACCOUNT_NAME, include_revoked=True)
@@ -117,7 +126,7 @@ def upgrade_v3_scopes_once(db: Any, active_sa: dict[str, Any], token_hash: str) 
         or updated.get("name") != V3_ACCOUNT_NAME
         or updated.get("token_hash") != token_hash
         or updated.get("revoked_at") is not None
-        or updated.get("scopes") != V3_SCOPES
+        or updated.get("scopes") != new_scopes
     ):
         # A concurrent identical migration is harmless; accept only if the
         # authoritative read-back is already the exact intended state.
@@ -125,6 +134,16 @@ def upgrade_v3_scopes_once(db: Any, active_sa: dict[str, Any], token_hash: str) 
             return "scope migration read-back did not match the requested state"
         return "scope migration compare-and-swap matched no row"
     return None
+
+
+def upgrade_v3_scopes_once(db: Any, active_sa: dict[str, Any], token_hash: str) -> str | None:
+    """Step 1: the exact legacy four scopes -> the eight v3 scopes."""
+    return _cas_scopes_once(db, active_sa, token_hash, BASE_SCOPES, V3_SCOPES)
+
+
+def upgrade_pee_reader_scope_once(db: Any, active_sa: dict[str, Any], token_hash: str) -> str | None:
+    """Step 2: the exact eight v3 scopes -> the same eight plus agents:pee-reader:run."""
+    return _cas_scopes_once(db, active_sa, token_hash, V3_SCOPES, V3_PEE_READER_SCOPES)
 
 
 def print_ready(sa_name: str, sa_scopes: list[str]) -> None:
@@ -216,6 +235,17 @@ def main():
             existing_scopes = active_sa.get("scopes")
             if sa_name == V3_ACCOUNT_NAME and existing_scopes == BASE_SCOPES:
                 grant_refusal = upgrade_v3_scopes_once(db, active_sa, token_hash)
+                if grant_refusal:
+                    print(
+                        f"ERROR: Service account {sa_name} scope upgrade refused: {grant_refusal}. Not mutating.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                active_sa = db.get_service_account_by_name(sa_name, include_revoked=False)
+                existing_scopes = active_sa.get("scopes") if active_sa else None
+
+            if sa_name == V3_ACCOUNT_NAME and existing_scopes == V3_SCOPES:
+                grant_refusal = upgrade_pee_reader_scope_once(db, active_sa, token_hash)
                 if grant_refusal:
                     print(
                         f"ERROR: Service account {sa_name} scope upgrade refused: {grant_refusal}. Not mutating.",
