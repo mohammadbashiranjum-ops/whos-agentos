@@ -22,7 +22,7 @@ GATES = (
 STANDING_ORDERS_HEADING = "## Owner standing orders — OD-0016 (2026-11-03) and OD-0017"
 OD0017_PENDING_SENTENCE = (
     "OD-0017 and the Command Center runbook (`docs/WHOS_CC_COMMAND_CENTER_RUNBOOK.md`) are not on "
-    "whos-backend main yet; this pointer will be completed when they land."
+    "whos-backend main yet (landing in whos-backend#2007); this pointer will be completed when they land."
 )
 STANDING_ORDERS_GATES = (
     "Payment",
@@ -33,6 +33,8 @@ STANDING_ORDERS_GATES = (
     "permanent delete",
     "any mutating action on a real device",
 )
+# Any spelling of OD-0017 (OD-17, OD 0017, OD–0017, ...).
+OD0017_ANY = re.compile(r"OD\s*[-\u2010-\u2015]?\s*0*17\b", re.IGNORECASE)
 # Phrases that only appear in the canonical rule text; a match means rules were copied here.
 COPY_DETECTOR = re.compile(r"IQ ?200|Hawk'?s Eye|Uber[- ]style|smart router|zero tolerance", re.IGNORECASE)
 
@@ -93,13 +95,14 @@ class WorkingCriteriaPointerTest(unittest.TestCase):
         self.assertIsNone(COPY_DETECTOR.search(text))
 
     def test_od0017_not_paraphrased(self) -> None:
-        # OD-0017 may appear only in the heading and the pending sentence; anywhere else in the
-        # file ("Under OD-0017 ...", "OD-0017 requires ...") would attribute content to it.
+        # OD-0017 and the runbook may appear only in the heading and the pending sentence; anywhere
+        # else ("Under OD-0017 ...", the runbook listed as on main) would claim content not landed.
         text = (ROOT / "AGENTS.md").read_text()
         self.assertEqual(text.count(STANDING_ORDERS_HEADING), 1)
         self.assertEqual(text.count(OD0017_PENDING_SENTENCE), 1)
         rest = text.replace(STANDING_ORDERS_HEADING, "").replace(OD0017_PENDING_SENTENCE, "")
-        self.assertNotIn("OD-0017", rest)
+        self.assertIsNone(OD0017_ANY.search(rest))
+        self.assertNotIn("WHOS_CC_COMMAND_CENTER_RUNBOOK", rest)
         self.assertNotRegex(text, r"OD-0017 \(2026-")
 
     def test_v1_folded_into_od0015_pointer(self) -> None:
