@@ -28,6 +28,7 @@ STANDING_ORDERS_GATES = (
     "legal commitment",
     "permanent delete",
 )
+PENDING = "(pending on whos-backend)"
 # Phrases that only appear in the canonical rule text; a match means rules were copied here.
 COPY_DETECTOR = re.compile(r"IQ ?200|Hawk'?s Eye|Uber[- ]style|smart router|zero tolerance", re.IGNORECASE)
 
@@ -56,13 +57,14 @@ class WorkingCriteriaPointerTest(unittest.TestCase):
         section = _section(text, STANDING_ORDERS_HEADING)
         for needle in (
             "OD-0016",
-            "OD-0017",
             "config/whos_owner_directives_v1.json",
             "docs/WHOS_AGENT_WORKING_ORDER_V2.md",
-            "docs/WHOS_CC_COMMAND_CENTER_RUNBOOK.md",
             "`whos-backend` `main`",
         ):
             self.assertIn(needle, section)
+        # Not yet on whos-backend main: named only with the pending marker, never as present.
+        for pending in ("OD-0017", "`docs/WHOS_CC_COMMAND_CENTER_RUNBOOK.md`"):
+            self.assertIn(f"{pending} {PENDING}", section)
         for gate in STANDING_ORDERS_GATES:
             self.assertIn(gate, section)
 
@@ -78,8 +80,18 @@ class WorkingCriteriaPointerTest(unittest.TestCase):
 
     def test_no_copied_rule_text(self) -> None:
         text = (ROOT / "AGENTS.md").read_text()
-        self.assertIsNone(COPY_DETECTOR.search(_section(text, STANDING_ORDERS_HEADING)))
+        # Fails (not errors) when the section is gone, so removing it cannot pass vacuously.
+        self.assertIn(STANDING_ORDERS_HEADING, text)
+        section = _section(text, STANDING_ORDERS_HEADING)
+        self.assertIn("OD-0016", section)
+        self.assertIsNone(COPY_DETECTOR.search(section))
         self.assertIsNone(COPY_DETECTOR.search(text))
+
+    def test_od0017_not_paraphrased(self) -> None:
+        text = (ROOT / "AGENTS.md").read_text()
+        self.assertIn(STANDING_ORDERS_HEADING, text)
+        section = _section(text, STANDING_ORDERS_HEADING)
+        self.assertNotRegex(section, r"OD-0017 (applies|requires|means|extends|says)")
 
     def test_claude_md_is_agents_md(self) -> None:
         self.assertEqual((ROOT / "CLAUDE.md").resolve(), (ROOT / "AGENTS.md").resolve())
