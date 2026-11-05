@@ -191,12 +191,16 @@ Two skills work this suite from opposite ends. To author coverage — especially
 
 ## Working Criteria V2 (OD-0015)
 
-The Owner ratified "Working Criteria V2" as `OD-0015` on 2026-11-02. This repo points at the canonical docs; it does not copy them. Read them in `wise-hands-company/whos-backend` on `main` (merged at `f5870b5c`):
+The Owner ratified "Working Criteria V2" as `OD-0015` on 2026-11-02 (V1: OD-0012 to OD-0014, `docs/WHOS_OWNER_WORKING_CRITERIA_V1.md`). This repo points at the canonical docs; it does not copy them. Read them in `wise-hands-company/whos-backend` on `main` (merged at `f5870b5c`):
 
 - `docs/WHOS_OWNER_WORKING_CRITERIA_V2.md` — the Owner's criteria, in order.
 - `docs/WHOS_AGENT_WORKING_ORDER_V2.md` — the agent-facing short form.
 
 V2 lowers no rule and grants no authority; where it and this file differ, the stricter rule wins. Payment, secrets/access, migrations, external publish/send, legal commitment, and destructive delete stay exact-Owner-approval gated. A Maker never PASSes its own work: a separate session reviews the exact head.
+
+## Owner standing orders — OD-0016 (2026-11-03) and OD-0017
+
+Canonical text lives on `whos-backend` `main`: the OD-0016 entry in `config/whos_owner_directives_v1.json` and the section "Owner standing orders (2026-11-03)" in `docs/WHOS_AGENT_WORKING_ORDER_V2.md`. OD-0017 and the Command Center runbook (`docs/WHOS_CC_COMMAND_CENTER_RUNBOOK.md`) are not on whos-backend main yet (landing in whos-backend#2007); this pointer will be completed when they land. There is deliberately no copy here, because a second copy is a second source of truth. This pointer grants no authority and lowers no rule. Payment, secrets or access, migration, external publish or send, legal commitment, permanent delete and any mutating action on a real device stay exact-Owner-approval gated. The Boundary paragraph in `docs/WHOS_AGENT_WORKING_ORDER_V2.md` is the full list. A Maker never judges its own artifact.
 
 ## Reviewing the repo
 
