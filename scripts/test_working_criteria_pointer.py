@@ -27,6 +27,7 @@ STANDING_ORDERS_GATES = (
     "external publish or send",
     "legal commitment",
     "permanent delete",
+    "any mutating action on a real device",
 )
 PENDING = "(pending on whos-backend)"
 # Phrases that only appear in the canonical rule text; a match means rules were copied here.
@@ -65,8 +66,10 @@ class WorkingCriteriaPointerTest(unittest.TestCase):
         # Not yet on whos-backend main: named only with the pending marker, never as present.
         for pending in ("OD-0017", "`docs/WHOS_CC_COMMAND_CENTER_RUNBOOK.md`"):
             self.assertIn(f"{pending} {PENDING}", section)
+        self.assertEqual(len(STANDING_ORDERS_GATES), 7)
         for gate in STANDING_ORDERS_GATES:
             self.assertIn(gate, section)
+        self.assertIn("Boundary paragraph in `docs/WHOS_AGENT_WORKING_ORDER_V2.md` is the full list", section)
 
     def test_standing_orders_section_follows_od0015(self) -> None:
         text = (ROOT / "AGENTS.md").read_text()
