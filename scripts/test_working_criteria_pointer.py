@@ -19,7 +19,11 @@ GATES = (
     "destructive delete",
 )
 
-STANDING_ORDERS_HEADING = "## Owner standing orders — OD-0016 (2026-11-03) and OD-0017 (2026-11-05)"
+STANDING_ORDERS_HEADING = "## Owner standing orders — OD-0016 (2026-11-03) and OD-0017"
+OD0017_PENDING_SENTENCE = (
+    "OD-0017 and the Command Center runbook (`docs/WHOS_CC_COMMAND_CENTER_RUNBOOK.md`) are not on "
+    "whos-backend main yet; this pointer will be completed when they land."
+)
 STANDING_ORDERS_GATES = (
     "Payment",
     "secrets or access",
@@ -29,7 +33,6 @@ STANDING_ORDERS_GATES = (
     "permanent delete",
     "any mutating action on a real device",
 )
-PENDING = "(pending on whos-backend)"
 # Phrases that only appear in the canonical rule text; a match means rules were copied here.
 COPY_DETECTOR = re.compile(r"IQ ?200|Hawk'?s Eye|Uber[- ]style|smart router|zero tolerance", re.IGNORECASE)
 
@@ -63,9 +66,8 @@ class WorkingCriteriaPointerTest(unittest.TestCase):
             "`whos-backend` `main`",
         ):
             self.assertIn(needle, section)
-        # Not yet on whos-backend main: named only with the pending marker, never as present.
-        for pending in ("OD-0017", "`docs/WHOS_CC_COMMAND_CENTER_RUNBOOK.md`"):
-            self.assertIn(f"{pending} {PENDING}", section)
+        # Not yet on whos-backend main: named only in the pending sentence, never as present.
+        self.assertIn(OD0017_PENDING_SENTENCE, section)
         self.assertEqual(len(STANDING_ORDERS_GATES), 7)
         for gate in STANDING_ORDERS_GATES:
             self.assertIn(gate, section)
@@ -91,10 +93,18 @@ class WorkingCriteriaPointerTest(unittest.TestCase):
         self.assertIsNone(COPY_DETECTOR.search(text))
 
     def test_od0017_not_paraphrased(self) -> None:
+        # OD-0017 may appear only in the heading and the pending sentence; anywhere else in the
+        # file ("Under OD-0017 ...", "OD-0017 requires ...") would attribute content to it.
         text = (ROOT / "AGENTS.md").read_text()
-        self.assertIn(STANDING_ORDERS_HEADING, text)
-        section = _section(text, STANDING_ORDERS_HEADING)
-        self.assertNotRegex(section, r"OD-0017 (applies|requires|means|extends|says)")
+        self.assertEqual(text.count(STANDING_ORDERS_HEADING), 1)
+        self.assertEqual(text.count(OD0017_PENDING_SENTENCE), 1)
+        rest = text.replace(STANDING_ORDERS_HEADING, "").replace(OD0017_PENDING_SENTENCE, "")
+        self.assertNotIn("OD-0017", rest)
+        self.assertNotRegex(text, r"OD-0017 \(2026-")
+
+    def test_v1_folded_into_od0015_pointer(self) -> None:
+        section = _section((ROOT / "AGENTS.md").read_text(), "## Working Criteria V2 (OD-0015)")
+        self.assertIn("(V1: OD-0012 to OD-0014, `docs/WHOS_OWNER_WORKING_CRITERIA_V1.md`)", section)
 
     def test_claude_md_is_agents_md(self) -> None:
         self.assertEqual((ROOT / "CLAUDE.md").resolve(), (ROOT / "AGENTS.md").resolve())
