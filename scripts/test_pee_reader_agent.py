@@ -33,11 +33,15 @@ from agno.tools.workspace import Workspace  # noqa: E402
 from agents import engineer, pee_reader  # noqa: E402
 from app import pee_denylist  # noqa: E402
 
-READ_FUNCTIONS = {"read_file", "list_files", "search_content"}
+READ_FUNCTIONS = {"list_files", "search_content"}  # whole-file read_file is withheld; read_lines replaces it
 
 
 def _workspace_toolkits(agent) -> list:
     return [tool for tool in agent.tools if isinstance(tool, Workspace)]
+
+
+def _line_readers(agent) -> list:
+    return [tool for tool in agent.tools if isinstance(tool, pee_reader.LineReader)]
 
 
 class PeeReaderAgentTests(unittest.TestCase):
@@ -60,8 +64,12 @@ class PeeReaderAgentTests(unittest.TestCase):
     def test_only_the_workspace_read_tools_are_mounted(self):
         toolkits = _workspace_toolkits(self.agent)
         self.assertEqual(len(toolkits), 1)
-        self.assertEqual(len(self.agent.tools), 1, "no tool other than the read-only workspace toolkit")
+        self.assertEqual(len(self.agent.tools), 2, "only the read-only workspace toolkit and the line reader")
         self.assertEqual(set(toolkits[0].functions), READ_FUNCTIONS)
+        self.assertEqual(set(toolkits[0].async_functions), READ_FUNCTIONS)
+        readers = _line_readers(self.agent)
+        self.assertEqual(len(readers), 1)
+        self.assertEqual(set(readers[0].functions), {"read_lines"})
         for forbidden in ("run_command", "write_file", "edit_file", "move_file", "delete_file"):
             self.assertNotIn(forbidden, toolkits[0].functions)
         self.assertEqual(toolkits[0].root, REPO_ROOT)
@@ -78,6 +86,12 @@ class PeeReaderAgentTests(unittest.TestCase):
 
     def test_file_reads_are_capped_at_512_kib(self):
         self.assertEqual(_workspace_toolkits(self.agent)[0].max_file_length, 524_288)
+
+    def test_instructions_name_the_line_tool_and_forbid_whole_file_reads(self):
+        text = " ".join(self.agent.instructions.split())
+        self.assertIn("read_lines(path, start, end)", text)
+        self.assertIn("never read the whole file", text)
+        self.assertNotIn("read_file", text, "the withheld tool must not be advertised")
 
     def test_instructions_say_repository_text_is_data(self):
         text = " ".join(self.agent.instructions.split())
@@ -156,6 +170,166 @@ class BuiltToolsRefuseDeniedNamesTests(unittest.TestCase):
         self.assertFalse(bare.read_file("kubeconfig").startswith("Error"), "a bare list drops the library defaults")
         self.assertTrue(self.tools.read_file("kubeconfig").startswith("Error"))
         self.assertTrue(self.tools.read_file("known_hosts").startswith("Error"))
+
+
+def _make_tree() -> Path:
+    root = Path(tempfile.mkdtemp(prefix="pee-lines-"))
+    (root / "src").mkdir()
+    (root / "src" / "big.ts").write_text("".join(f"line {i}\n" for i in range(1, 1001)))
+    (root / "src" / "short.ts").write_text("a\nb\nc\n")
+    (root / "src" / "uni.ts").write_text("héllo wörld ✓ 日本語\n" + "x" * 5000 + "\nlast\n", encoding="utf-8")
+    (root / "key.pem").write_text("-----BEGIN PRIVATE KEY-----\nSECRETBODY\n")
+    (root / "Id_Rsa").write_text("SECRETBODY\n")
+    return root
+
+
+def _reader_for(root: Path, cls=None):
+    ws = Workspace(root=root, allowed=Workspace.READ_TOOLS, exclude_patterns=list(pee_reader.EXCLUDE_PATTERNS))
+    return (cls or pee_reader.LineReader)(ws)
+
+
+def _cap_holds(reader) -> bool:
+    return reader.read_lines("src/big.ts", 1, 201).startswith("Error") and not reader.read_lines(
+        "src/big.ts", 1, 200
+    ).startswith("Error")
+
+
+def _denied_refused(reader, root: Path) -> bool:
+    return all(
+        reader.read_lines(name, 1, 2).startswith("Error") and "SECRETBODY" not in reader.read_lines(name, 1, 2)
+        for name in ("key.pem", "Id_Rsa")
+    )
+
+
+class ReadLinesTests(unittest.TestCase):
+    def setUp(self):
+        self.root = _make_tree()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.reader = _reader_for(self.root)
+
+    def test_returns_exact_lines_with_their_numbers(self):
+        out = self.reader.read_lines("src/big.ts", 500, 502)
+        self.assertEqual(out.splitlines(), ["   500\tline 500", "   501\tline 501", "   502\tline 502"])
+
+    def test_single_line_and_first_and_last(self):
+        self.assertEqual(self.reader.read_lines("src/big.ts", 1, 1), "     1\tline 1")
+        self.assertEqual(self.reader.read_lines("src/big.ts", 1000, 1000), "  1000\tline 1000")
+
+    def test_output_is_far_smaller_than_the_file(self):
+        full = (self.root / "src" / "big.ts").read_text()
+        self.assertLess(len(self.reader.read_lines("src/big.ts", 500, 510)), len(full) // 20)
+
+    def test_range_cap(self):
+        self.assertTrue(_cap_holds(self.reader))
+        self.assertIn("range too large", self.reader.read_lines("src/big.ts", 1, 1000))
+
+    def test_bad_ranges_are_refused(self):
+        for start, end in ((0, 3), (-1, 3), (5, 4)):
+            self.assertTrue(self.reader.read_lines("src/big.ts", start, end).startswith("Error"), (start, end))
+        self.assertTrue(self.reader.read_lines("src/big.ts", "1", 3).startswith("Error"))
+        self.assertTrue(self.reader.read_lines("src/big.ts", True, 3).startswith("Error"))
+
+    def test_character_cap_for_long_lines(self):
+        (self.root / "src" / "wide.ts").write_text("".join("y" * 1000 + "\n" for _ in range(60)))
+        self.assertIn("range too large", self.reader.read_lines("src/wide.ts", 1, 60))
+        self.assertFalse(self.reader.read_lines("src/wide.ts", 1, 10).startswith("Error"))
+
+    def test_file_shorter_than_the_range_returns_what_exists(self):
+        self.assertEqual(self.reader.read_lines("src/short.ts", 2, 50).splitlines(), ["     2\tb", "     3\tc"])
+
+    def test_start_past_end_of_file_is_an_error(self):
+        self.assertEqual(self.reader.read_lines("src/short.ts", 40, 45), "Error: file has no line 40")
+
+    def test_unicode_and_a_long_line_are_returned_whole(self):
+        out = self.reader.read_lines("src/uni.ts", 1, 2)
+        self.assertIn("héllo wörld ✓ 日本語", out)
+        self.assertIn("x" * 5000, out)
+
+    def test_missing_file(self):
+        self.assertTrue(self.reader.read_lines("src/nope.ts", 1, 2).startswith("Error"))
+
+    def test_path_traversal_and_absolute_paths_are_refused(self):
+        outside = self.root.parent / f"{self.root.name}-outside.txt"
+        outside.write_text("OUTSIDE\n")
+        self.addCleanup(outside.unlink)
+        for path in (f"../{outside.name}", str(outside), "src/../../etc/passwd", "/etc/passwd"):
+            out = self.reader.read_lines(path, 1, 2)
+            self.assertTrue(out.startswith("Error"), path)
+            self.assertNotIn("OUTSIDE", out)
+
+    def test_symlink_escaping_the_root_is_refused(self):
+        outside = self.root.parent / f"{self.root.name}-target.txt"
+        outside.write_text("OUTSIDE\n")
+        self.addCleanup(outside.unlink)
+        (self.root / "src" / "link.ts").symlink_to(outside)
+        out = self.reader.read_lines("src/link.ts", 1, 1)
+        self.assertTrue(out.startswith("Error"))
+        self.assertNotIn("OUTSIDE", out)
+
+    def test_symlink_to_a_denied_file_is_refused(self):
+        (self.root / "src" / "innocent.ts").symlink_to(self.root / "key.pem")
+        out = self.reader.read_lines("src/innocent.ts", 1, 2)
+        self.assertTrue(out.startswith("Error"))
+        self.assertNotIn("SECRETBODY", out)
+
+    def test_credential_files_are_refused_in_any_case(self):
+        self.assertTrue(_denied_refused(self.reader, self.root))
+        (self.root / "KEY.PEM").write_text("SECRETBODY\n")
+        self.assertTrue(self.reader.read_lines("KEY.PEM", 1, 1).startswith("Error"))
+
+    def test_denied_directory_component_is_refused(self):
+        (self.root / "secrets").mkdir()
+        (self.root / "secrets" / "a.txt").write_text("SECRETBODY\n")
+        self.assertTrue(self.reader.read_lines("secrets/a.txt", 1, 1).startswith("Error"))
+
+    def test_async_variant_matches(self):
+        import asyncio
+
+        self.assertEqual(
+            asyncio.run(self.reader.aread_lines("src/big.ts", 3, 4)), self.reader.read_lines("src/big.ts", 3, 4)
+        )
+
+    def test_agent_has_no_whole_file_read_tool(self):
+        names = set()
+        for tool in pee_reader.pee_reader.tools:
+            names |= set(tool.functions) | set(tool.async_functions)
+        self.assertNotIn("read_file", names)
+        self.assertNotIn("aread_file", names)
+
+
+class MutantTests(unittest.TestCase):
+    """Each mutation of read_lines must be caught by an assertion, or the tests above prove nothing."""
+
+    def _mutated(self, old: str, new: str):
+        source = Path(pee_reader.__file__).read_text()
+        self.assertEqual(source.count(old), 1, old)
+        namespace: dict = {"__name__": "pee_reader_mutant", "__file__": pee_reader.__file__}
+        # Only the class body is needed; run the module top to bottom without the Agent import side effects.
+        exec(compile(source.replace(old, new), "pee_reader_mutant", "exec"), namespace)
+        return namespace["LineReader"]
+
+    def test_removing_the_line_cap_fails_the_cap_check(self):
+        cls = self._mutated("if end - start + 1 > MAX_READ_LINES:", "if False:")
+        root = _make_tree()
+        self.addCleanup(shutil.rmtree, root, True)
+        self.assertFalse(_cap_holds(_reader_for(root, cls)))
+
+    def test_removing_the_deny_check_fails_the_deny_check(self):
+        # Bypass the Workspace (and so its exclude boundary) with a bare file read.
+        cls = self._mutated(
+            "out = self._ws.read_file(path, start_line=start, end_line=end)",
+            "out = '\\n'.join((self._ws.root / path).read_text().split('\\n')[start - 1 : end])",
+        )
+        root = _make_tree()
+        self.addCleanup(shutil.rmtree, root, True)
+        self.assertFalse(_denied_refused(_reader_for(root, cls), root))
+
+    def test_unmutated_reader_passes_both_checks(self):
+        root = _make_tree()
+        self.addCleanup(shutil.rmtree, root, True)
+        reader = _reader_for(root)
+        self.assertTrue(_cap_holds(reader))
+        self.assertTrue(_denied_refused(reader, root))
 
 
 class PlatformEngineerCannotReadWorkspacesTests(unittest.TestCase):
