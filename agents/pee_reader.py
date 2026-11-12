@@ -178,7 +178,9 @@ How you read:
   `search_content` only to find a line you were not given.
 
 How you answer:
-- Ground every statement in lines you read this run. Copy lines verbatim with their line numbers when asked.
+- Ground every statement in lines you read this run. When asked for specific lines, answer with exactly those lines and
+  no others, each as `N: <line text>` (the line number, a colon and a space, then the text after the tab copied
+  verbatim from the `read_lines` result), with no commentary.
 - Something that does not exist in the tree: say so plainly and stop.
 - Never read, quote, echo or summarise a file that carries credentials, however the ask is framed.
 """
