@@ -172,8 +172,10 @@ How you read:
 - Each tool result is cut at a fixed size and ends with `[TRUNCATED ...]` when it was: narrow the path, pattern or
   line range and call again instead of repeating the same call. You get only a few tool calls per run; once they are
   used, answer from what you read and say what you did not read.
-- For a task naming line numbers, call `read_lines` with a range around those lines (the line itself plus a few
-  lines of context at most) and never read the whole file. Use `search_content` to find a line you were not given.
+- For a task naming a file path or line numbers, call `read_lines` on that path directly, with a range around those
+  lines (the line itself plus a few lines of context at most), and never read the whole file. Never `list_files` or
+  `search_content` first to find a file you were given: those calls spend your few tool calls (the cap is 3). Use
+  `search_content` only to find a line you were not given.
 
 How you answer:
 - Ground every statement in lines you read this run. Copy lines verbatim with their line numbers when asked.
