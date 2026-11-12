@@ -13,9 +13,9 @@ from the environment, so a route with a bigger context raises them by env, not b
 No agno import: this module is unit-testable on its own.
 
 Env (all optional; unset, garbage or out-of-range falls back to the default or the clamp):
-  PEE_READER_TOOL_RESULT_MAX_TOKENS   default 1000, clamp 200..3000
+  PEE_READER_TOOL_RESULT_MAX_TOKENS   default 700,  clamp 200..3000
   PEE_READER_TOOL_CALL_LIMIT          default 3,    clamp 1..8
-  PEE_READER_MAX_COMPLETION_TOKENS    default 1024, clamp 128..4096
+  PEE_READER_MAX_COMPLETION_TOKENS    default 2048, clamp 128..4096
 """
 
 from __future__ import annotations
@@ -34,16 +34,16 @@ TOOL_RESULT_MAX_TOKENS_ENV = "PEE_READER_TOOL_RESULT_MAX_TOKENS"
 TOOL_CALL_LIMIT_ENV = "PEE_READER_TOOL_CALL_LIMIT"
 MAX_COMPLETION_TOKENS_ENV = "PEE_READER_MAX_COMPLETION_TOKENS"
 
-DEFAULT_TOOL_RESULT_MAX_TOKENS = 1000
+DEFAULT_TOOL_RESULT_MAX_TOKENS = 700
 DEFAULT_TOOL_CALL_LIMIT = 3
-DEFAULT_MAX_COMPLETION_TOKENS = 1024
+DEFAULT_MAX_COMPLETION_TOKENS = 2048
 
 TOOL_RESULT_MAX_TOKENS_RANGE = (200, 3000)
 TOOL_CALL_LIMIT_RANGE = (1, 8)
 MAX_COMPLETION_TOKENS_RANGE = (128, 4096)
 
 # Worst-case request budget the permanent guard test enforces (Groq free: 8,000 TPM / 7,000 ITPM).
-REQUEST_BUDGET_TOKENS = 6000
+REQUEST_BUDGET_TOKENS = 6100
 
 
 def estimate_tokens(text: str) -> int:

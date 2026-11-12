@@ -18,9 +18,9 @@ repository text into AgentOS Postgres. This one carries none of them.
   deny-list (`scripts/pee_path_denylist_v1.json`): passing a bare list would
   replace the defaults, so the two are joined here;
 - file reads are capped at 512 KiB;
-- every tool result is capped at `PEE_READER_TOOL_RESULT_MAX_TOKENS` (default 1000 estimated tokens), the run at
+- every tool result is capped at `PEE_READER_TOOL_RESULT_MAX_TOKENS` (default 700 estimated tokens), the run at
   `PEE_READER_TOOL_CALL_LIMIT` tool calls (default 3) and each completion at `PEE_READER_MAX_COMPLETION_TOKENS`
-  (default 1024), so a run stays under a free lane's 8,000 TPM / 7,000 ITPM ceiling (`app/prompt_budget.py`).
+  (default 2048), so a run stays under a free lane's 8,000 TPM / 7,000 ITPM ceiling (`app/prompt_budget.py`).
   This is not `app/offload.py`: offloading would copy private repository text into Postgres, which this agent
   is built never to do, so an over-cap result is truncated with a marker and the agent narrows and re-reads.
 """
@@ -52,12 +52,12 @@ MAX_FILE_BYTES = 524_288
 # A "copy line N" task needs a handful of lines. These caps keep one read small enough
 # for the 120b lane's per-request token ceiling (a whole 20-35 KB file is not).
 MAX_READ_LINES = 200
-# Derived from the per-result token cap (default 1000 tokens x 3 = 3,000 chars); a longer read is truncated.
+# Derived from the per-result token cap (default 700 tokens x 3 = 2,100 chars); a longer read is truncated.
 MAX_READ_CHARS = tool_result_max_tokens() * CHARS_PER_TOKEN
 # `list_files(recursive=True)` is the largest uncapped output a workspace tool can return.
 LIST_FILES_MAX_DEPTH = 2
-# ~70-90 chars per compact entry: 30 entries fit the default 3,000-char result cap with their note.
-LIST_FILES_MAX_ENTRIES = 30
+# ~70-90 chars per compact entry: 22 entries fit the default 2,100-char result cap with their note.
+LIST_FILES_MAX_ENTRIES = 22
 
 EXCLUDE_PATTERNS = [*DEFAULT_EXCLUDE_PATTERNS, *provider_exclude_patterns(for_agent="pee-reader")]
 

@@ -79,9 +79,9 @@ class CapTextTests(unittest.TestCase):
 
 class EnvClampTests(unittest.TestCase):
     CASES = (
-        (pb.TOOL_RESULT_MAX_TOKENS_ENV, pb.tool_result_max_tokens, 1000, (200, 3000)),
+        (pb.TOOL_RESULT_MAX_TOKENS_ENV, pb.tool_result_max_tokens, 700, (200, 3000)),
         (pb.TOOL_CALL_LIMIT_ENV, pb.tool_call_limit, 3, (1, 8)),
-        (pb.MAX_COMPLETION_TOKENS_ENV, pb.max_completion_tokens, 1024, (128, 4096)),
+        (pb.MAX_COMPLETION_TOKENS_ENV, pb.max_completion_tokens, 2048, (128, 4096)),
     )
 
     def test_defaults_when_unset_empty_or_garbage(self):
@@ -235,7 +235,7 @@ class WorstCaseBudgetTests(unittest.TestCase):
         self.assertLessEqual(base, BASE_FLOOR_TOKENS + 400, f"base prompt grew to ~{base} tokens")
         calls, cap, completion = int(agent.tool_call_limit), pb.tool_result_max_tokens(), pb.max_completion_tokens()
         # Earlier assistant turns are short tool-call messages that are resent; the last completion is only requested.
-        worst = base + calls * cap + calls * TOOL_CALL_MESSAGE_TOKENS + min(completion, 1024)
+        worst = base + calls * cap + calls * TOOL_CALL_MESSAGE_TOKENS + completion
         self.assertLessEqual(worst, pb.REQUEST_BUDGET_TOKENS, f"worst-case request ~{worst} tokens")
 
     def test_the_documented_defaults_themselves_fit(self):
