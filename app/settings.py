@@ -29,19 +29,25 @@ def active_model_provider() -> tuple[str, str]:
     return "unconfigured", ""
 
 
-def default_model() -> OpenAILike | OpenAIResponses:
-    """Fresh model instance per agent; WHOS fuel when configured, else Groq, else OpenAI."""
+def default_model(max_completion_tokens: int | None = None) -> OpenAILike | OpenAIResponses:
+    """Fresh model instance per agent; WHOS fuel when configured, else Groq, else OpenAI.
+
+    ``max_completion_tokens`` is None for every agent but PEE Reader, which sets it so a free lane's per-minute
+    token ceiling (requested completion counts against it) cannot be breached by one long answer. None sends nothing.
+    """
     provider, model_id = active_model_provider()
     if provider == "whos-fuel":
         return OpenAILike(
             id=model_id,
             api_key=getenv("WHOS_FUEL_API_KEY") or WHOS_FUEL_UNSET_KEY,
             base_url=getenv("WHOS_FUEL_BASE_URL"),
+            max_completion_tokens=max_completion_tokens,
         )
     if provider == "groq":
         return OpenAILike(
             id=model_id,
             api_key=getenv("GROQ_API_KEY"),
             base_url=GROQ_BASE_URL,
+            max_completion_tokens=max_completion_tokens,
         )
-    return OpenAIResponses(id=model_id or DEFAULT_OPENAI_MODEL)
+    return OpenAIResponses(id=model_id or DEFAULT_OPENAI_MODEL, max_output_tokens=max_completion_tokens)

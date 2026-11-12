@@ -17,9 +17,15 @@ repository text into AgentOS Postgres. This one carries none of them.
 - `exclude_patterns` is the library default list CONCATENATED with the shared
   deny-list (`scripts/pee_path_denylist_v1.json`): passing a bare list would
   replace the defaults, so the two are joined here;
-- file reads are capped at 512 KiB.
+- file reads are capped at 512 KiB;
+- every tool result is capped at `PEE_READER_TOOL_RESULT_MAX_TOKENS` (default 700 estimated tokens), the run at
+  `PEE_READER_TOOL_CALL_LIMIT` tool calls (default 3) and each completion at `PEE_READER_MAX_COMPLETION_TOKENS`
+  (default 2048), so a run stays under a free lane's 8,000 TPM / 7,000 ITPM ceiling (`app/prompt_budget.py`).
+  This is not `app/offload.py`: offloading would copy private repository text into Postgres, which this agent
+  is built never to do, so an over-cap result is truncated with a marker and the agent narrows and re-reads.
 """
 
+import json
 from pathlib import Path
 
 from agno.agent import Agent
@@ -30,6 +36,14 @@ from agno.tools.toolkit import Toolkit
 from agno.tools.workspace import Workspace
 
 from app.pee_denylist import provider_exclude_patterns
+from app.prompt_budget import (
+    CHARS_PER_TOKEN,
+    cap_entrypoint,
+    cap_text,
+    max_completion_tokens,
+    tool_call_limit,
+    tool_result_max_tokens,
+)
 from app.settings import default_model
 from db import get_postgres_db
 
@@ -38,7 +52,12 @@ MAX_FILE_BYTES = 524_288
 # A "copy line N" task needs a handful of lines. These caps keep one read small enough
 # for the 120b lane's per-request token ceiling (a whole 20-35 KB file is not).
 MAX_READ_LINES = 200
-MAX_READ_CHARS = 20_000
+# Derived from the per-result token cap (default 700 tokens x 3 = 2,100 chars); a longer read is truncated.
+MAX_READ_CHARS = tool_result_max_tokens() * CHARS_PER_TOKEN
+# `list_files(recursive=True)` is the largest uncapped output a workspace tool can return.
+LIST_FILES_MAX_DEPTH = 2
+# ~70-90 chars per compact entry: 22 entries fit the default 2,100-char result cap with their note.
+LIST_FILES_MAX_ENTRIES = 22
 
 EXCLUDE_PATTERNS = [*DEFAULT_EXCLUDE_PATTERNS, *provider_exclude_patterns(for_agent="pee-reader")]
 
@@ -61,8 +80,9 @@ class LineReader(Toolkit):
     a size limit and nothing else.
     """
 
-    def __init__(self, workspace_tools: Workspace):
+    def __init__(self, workspace_tools: Workspace, max_tokens: int | None = None):
         self._ws = workspace_tools
+        self._max_tokens = max_tokens if max_tokens is not None else tool_result_max_tokens()
         super().__init__(name="line_reader", tools=[self.read_lines], async_tools=[(self.aread_lines, "read_lines")])
 
     def read_lines(self, path: str, start: int, end: int) -> str:
@@ -82,15 +102,38 @@ class LineReader(Toolkit):
         out = self._ws.read_file(path, start_line=start, end_line=end)
         if out.startswith("Error"):
             return out
-        if len(out) > MAX_READ_CHARS:
-            return f"Error: range too large ({len(out)} chars > {MAX_READ_CHARS}); read fewer lines"
         if not out:
             return f"Error: file has no line {start}"
-        return out
+        # Over the token cap: keep the first lines and say so, so the agent can narrow the range.
+        return cap_text(out, self._max_tokens)[0]
 
     async def aread_lines(self, path: str, start: int, end: int) -> str:
         """Async variant of ``read_lines``."""
         return self.read_lines(path, start, end)
+
+
+def _clamp_list_files(arguments: dict) -> dict:
+    arguments["max_depth"] = min(max(int(arguments["max_depth"]), 0), LIST_FILES_MAX_DEPTH)
+    return arguments
+
+
+def _limit_list_entries(result):
+    """Keep the first LIST_FILES_MAX_ENTRIES entries and say how many there were; leave errors alone."""
+    if not isinstance(result, str):
+        return result
+    try:
+        data = json.loads(result)
+    except ValueError:
+        return result
+    files = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(files, list) or len(files) <= LIST_FILES_MAX_ENTRIES:
+        return result
+    data["files"] = files[:LIST_FILES_MAX_ENTRIES]
+    data["entries_total"] = len(files)
+    data["truncated"] = (
+        f"showing {LIST_FILES_MAX_ENTRIES} of {len(files)} entries; list a subdirectory or set a pattern"
+    )
+    return json.dumps(data, separators=(",", ":"))
 
 
 def _build_tools() -> list:
@@ -98,7 +141,19 @@ def _build_tools() -> list:
     # Withhold the whole-file read: ranged reads only.
     ws.functions.pop("read_file", None)
     ws.async_functions.pop("read_file", None)
-    return [ws, LineReader(ws)]
+    # Cap what the remaining workspace tools hand back. Wrapping the entrypoint (not an agno tool_hook) because a
+    # hook sees an async `next_func` on the async path and not on the sync one, so it would need two forms.
+    cap = tool_result_max_tokens()
+    for functions in (ws.functions, ws.async_functions):
+        listing = functions.get("list_files")
+        if listing is not None:
+            listing.entrypoint = cap_entrypoint(
+                listing.entrypoint, cap, before=_clamp_list_files, after=_limit_list_entries
+            )
+        search = functions.get("search_content")
+        if search is not None:
+            search.entrypoint = cap_entrypoint(search.entrypoint, cap)
+    return [ws, LineReader(ws, cap)]
 
 
 INSTRUCTIONS = """\
@@ -114,6 +169,9 @@ search the whole of `workspaces/`, and say so if a path is missing.
 
 How you read:
 - You have no whole-file read. Use `read_lines(path, start, end)` (at most 200 lines per call).
+- Each tool result is cut at a fixed size and ends with `[TRUNCATED ...]` when it was: narrow the path, pattern or
+  line range and call again instead of repeating the same call. You get only a few tool calls per run; once they are
+  used, answer from what you read and say what you did not read.
 - For a task naming line numbers, call `read_lines` with a range around those lines (the line itself plus a few
   lines of context at most) and never read the whole file. Use `search_content` to find a line you were not given.
 
@@ -126,9 +184,10 @@ How you answer:
 pee_reader = Agent(
     id="pee-reader",
     name="PEE Reader",
-    model=default_model(),
+    model=default_model(max_completion_tokens=max_completion_tokens()),
     db=get_postgres_db(),
     tools=_build_tools(),
+    tool_call_limit=tool_call_limit(),
     # Blank line between the two, or the provider's instructions run into the last sentence.
     instructions=f"{INSTRUCTIONS}\n\n{workspace.instructions().replace('and `read_file`', 'and `read_lines`')}",
     # No learning, no history, no offload store: nothing read here is remembered.
