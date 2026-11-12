@@ -177,7 +177,7 @@ def _make_tree() -> Path:
     (root / "src").mkdir()
     (root / "src" / "big.ts").write_text("".join(f"line {i}\n" for i in range(1, 1001)))
     (root / "src" / "short.ts").write_text("a\nb\nc\n")
-    (root / "src" / "uni.ts").write_text("héllo wörld ✓ 日本語\n" + "x" * 5000 + "\nlast\n", encoding="utf-8")
+    (root / "src" / "uni.ts").write_text("héllo wörld ✓ 日本語\n" + "x" * 2000 + "\nlast\n", encoding="utf-8")
     (root / "key.pem").write_text("-----BEGIN PRIVATE KEY-----\nSECRETBODY\n")
     (root / "Id_Rsa").write_text("SECRETBODY\n")
     return root
@@ -231,8 +231,12 @@ class ReadLinesTests(unittest.TestCase):
 
     def test_character_cap_for_long_lines(self):
         (self.root / "src" / "wide.ts").write_text("".join("y" * 1000 + "\n" for _ in range(60)))
-        self.assertIn("range too large", self.reader.read_lines("src/wide.ts", 1, 60))
-        self.assertFalse(self.reader.read_lines("src/wide.ts", 1, 10).startswith("Error"))
+        # Over the cap: the first lines come back with a marker rather than an error (app/prompt_budget.py).
+        out = self.reader.read_lines("src/wide.ts", 1, 60)
+        self.assertLessEqual(len(out), pee_reader.MAX_READ_CHARS)
+        self.assertTrue(out.startswith("     1\t" + "y" * 100))
+        self.assertIn("[TRUNCATED: showing ", out)
+        self.assertNotIn("TRUNCATED", self.reader.read_lines("src/wide.ts", 1, 2))
 
     def test_file_shorter_than_the_range_returns_what_exists(self):
         self.assertEqual(self.reader.read_lines("src/short.ts", 2, 50).splitlines(), ["     2\tb", "     3\tc"])
@@ -243,7 +247,7 @@ class ReadLinesTests(unittest.TestCase):
     def test_unicode_and_a_long_line_are_returned_whole(self):
         out = self.reader.read_lines("src/uni.ts", 1, 2)
         self.assertIn("héllo wörld ✓ 日本語", out)
-        self.assertIn("x" * 5000, out)
+        self.assertIn("x" * 2000, out)
 
     def test_missing_file(self):
         self.assertTrue(self.reader.read_lines("src/nope.ts", 1, 2).startswith("Error"))
